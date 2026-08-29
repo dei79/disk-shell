@@ -64,3 +64,13 @@ test("sends the fitted terminal size as soon as the websocket opens", () => {
   assert.match(openHandler, /this\.terminal\?\.cols/u);
   assert.match(openHandler, /this\.terminal\?\.rows/u);
 });
+
+test("fits the terminal from container-driven DSM window resizes", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
+  assert.match(view, /ResizeObserver\(\(\) => this\.scheduleFit\(\)\)/u);
+  assert.match(view, /requestAnimationFrame/u);
+  assert.match(styles, /container:\s*dsm-terminal\s*\/\s*inline-size/u);
+  assert.match(styles, /@container dsm-terminal \(max-width: 520px\)/u);
+  assert.doesNotMatch(styles, /min-height:\s*420px/u);
+});

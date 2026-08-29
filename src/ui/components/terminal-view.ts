@@ -2,18 +2,23 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
 import { TerminalSocket } from "../services/terminal-socket.js";
+import { messages } from "../i18n.js";
+import type { Messages } from "../i18n.js";
 import type { ConnectionState } from "../types.js";
 import { statusBarComponent } from "./status-bar.js";
 
 type TerminalView = {
   connectionState: ConnectionState;
+  text: Messages;
   errorMessage: string;
   terminal: Terminal | null;
   fitAddon: FitAddon | null;
   terminalSocket: TerminalSocket | null;
   resizeObserver: ResizeObserver | null;
+  fitFrame: number | null;
   connect(): void;
   fit(): void;
+  scheduleFit(): void;
 };
 
 export const terminalViewComponent = {
@@ -21,26 +26,28 @@ export const terminalViewComponent = {
   template: [
     '<section class="dsm-terminal-shell">',
     '  <header class="dsm-terminal-toolbar">',
-    '    <div><strong>DSM Terminal</strong><span>Interaktive Shell auf deinem NAS</span></div>',
+    '    <div><strong>DSM Terminal</strong><span>{{ text.subtitle }}</span></div>',
     '    <div class="dsm-terminal-actions">',
-    '      <button type="button" @click="copySelection" :disabled="!connected">Kopieren</button>',
-    '      <button type="button" @click="pasteClipboard" :disabled="!connected">Einfügen</button>',
-    '      <button type="button" class="primary" @click="connect" v-if="!connected">Neu verbinden</button>',
+    '      <button type="button" @click="copySelection" :disabled="!connected">{{ text.copy }}</button>',
+    '      <button type="button" @click="pasteClipboard" :disabled="!connected">{{ text.paste }}</button>',
+    '      <button type="button" class="primary" @click="connect" v-if="!connected">{{ text.reconnect }}</button>',
     '    </div>',
     '  </header>',
     '  <div v-if="errorMessage" class="dsm-terminal-alert" role="alert">{{ errorMessage }}</div>',
-    '  <div ref="terminal" class="dsm-terminal-canvas" aria-label="Interaktives DSM-Terminal"></div>',
-    '  <terminal-status-bar :state="connectionState"></terminal-status-bar>',
+    '  <div ref="terminal" class="dsm-terminal-canvas" :aria-label="text.terminalAriaLabel"></div>',
+    '  <terminal-status-bar :state="connectionState" :text="text"></terminal-status-bar>',
     '</section>',
   ].join(""),
   data() {
     return {
       connectionState: "connecting" as ConnectionState,
+      text: messages,
       errorMessage: "",
       terminal: null as Terminal | null,
       fitAddon: null as FitAddon | null,
       terminalSocket: null as TerminalSocket | null,
       resizeObserver: null as ResizeObserver | null,
+      fitFrame: null as number | null,
     };
   },
   computed: {
@@ -71,13 +78,14 @@ export const terminalViewComponent = {
     this.terminal.open(this.$refs.terminal);
     this.terminal.onData((data) => this.terminalSocket?.send({ type: "input", data }));
     this.terminal.onResize(({ cols, rows }) => this.terminalSocket?.send({ type: "resize", cols, rows }));
-    this.resizeObserver = new ResizeObserver(() => this.fit());
+    this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.$refs.terminal);
-    this.fit();
+    this.scheduleFit();
     this.connect();
   },
   beforeDestroy(this: TerminalView): void {
     this.resizeObserver?.disconnect();
+    if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
     this.terminalSocket?.disconnect();
     this.terminal?.dispose();
   },
@@ -86,7 +94,7 @@ export const terminalViewComponent = {
       this.connectionState = "connecting";
       this.errorMessage = "";
       this.terminal?.clear();
-      this.terminal?.write("\x1b[38;5;81mDSM Terminal\x1b[0m – Verbindung wird hergestellt …\r\n");
+      this.terminal?.write(`\x1b[38;5;81mDSM Terminal\x1b[0m – ${this.text.connectingTerminal}\r\n`);
       this.terminalSocket = new TerminalSocket({
         onOpen: () => {
           this.connectionState = "connected";
@@ -117,6 +125,13 @@ export const terminalViewComponent = {
       } catch {
         // DSM can briefly report a zero-sized window during its opening animation.
       }
+    },
+    scheduleFit(this: TerminalView): void {
+      if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
+      this.fitFrame = requestAnimationFrame(() => {
+        this.fitFrame = null;
+        this.fit();
+      });
     },
     async copySelection(this: TerminalView): Promise<void> {
       const selection = this.terminal?.getSelection() || "";

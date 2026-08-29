@@ -6,4 +6,4 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: "output"; data: string }
-  | { type: "error"; message: string };
+  | { type: "error"; code?: string; message?: string };

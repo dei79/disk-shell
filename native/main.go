@@ -37,6 +37,7 @@ type clientMessage struct {
 type serverMessage struct {
 	Type    string `json:"type"`
 	Data    string `json:"data,omitempty"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -136,7 +137,7 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 	}
 	terminalFile, err := pty.StartWithSize(command, &pty.Winsize{Cols: 120, Rows: 36})
 	if err != nil {
-		_ = connection.WriteJSON(serverMessage{Type: "error", Message: "Die DSM-Shell konnte nicht gestartet werden."})
+		_ = connection.WriteJSON(serverMessage{Type: "error", Code: "shell_start_failed", Message: "The DSM shell could not be started."})
 		return
 	}
 	defer terminalFile.Close()

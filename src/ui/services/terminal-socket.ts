@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage } from "../types.js";
+import { messages } from "../i18n.js";
 
 export interface TerminalSocketEvents {
   onOpen(): void;
@@ -21,7 +22,7 @@ export class TerminalSocket {
     this.socket = socket;
     socket.addEventListener("open", () => this.events.onOpen());
     socket.addEventListener("close", () => this.events.onClose());
-    socket.addEventListener("error", () => this.events.onError("Die Terminal-Verbindung konnte nicht hergestellt werden."));
+    socket.addEventListener("error", () => this.events.onError(messages.connectionFailed));
     socket.addEventListener("message", (event) => this.receive(event.data));
   }
 
@@ -39,9 +40,12 @@ export class TerminalSocket {
     try {
       const message = JSON.parse(value) as ServerMessage;
       if (message.type === "output" && typeof message.data === "string") this.events.onOutput(message.data);
-      if (message.type === "error" && typeof message.message === "string") this.events.onError(message.message);
+      if (message.type === "error") {
+        if (message.code === "shell_start_failed") this.events.onError(messages.shellStartFailed);
+        else this.events.onError(typeof message.message === "string" ? message.message : messages.serviceError);
+      }
     } catch {
-      this.events.onError("Der Terminal-Dienst hat eine ungültige Antwort gesendet.");
+      this.events.onError(messages.invalidResponse);
     }
   }
 }
