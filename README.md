@@ -42,3 +42,7 @@ After installation:
 
 Keep the package revision unique for every live run so DSM does not reuse cached
 JavaScript or CSS assets.
+
+## License
+
+DiskShell is available under the MIT License. See [LICENSE](LICENSE).
