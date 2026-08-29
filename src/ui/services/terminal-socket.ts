@@ -17,8 +17,8 @@ export class TerminalSocket {
     this.disconnect();
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = currentSynoToken();
-    const query = token ? `?SynoToken=${encodeURIComponent(token)}` : "";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/diskshell/ws${query}`);
+    const protocols = token ? [synoTokenSubprotocol(token)] : undefined;
+    const socket = new WebSocket(`${protocol}//${window.location.host}/diskshell/ws`, protocols);
     this.socket = socket;
     socket.addEventListener("open", () => this.events.onOpen());
     socket.addEventListener("close", () => this.events.onClose());
@@ -48,6 +48,14 @@ export class TerminalSocket {
       this.events.onError(messages.invalidResponse);
     }
   }
+}
+
+function synoTokenSubprotocol(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const encoded = btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return `diskshell.syno-token.${encoded}`;
 }
 
 function currentSynoToken(): string {

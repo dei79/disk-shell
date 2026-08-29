@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +25,20 @@ import (
 )
 
 const (
-	listenAddress  = "127.0.0.1:16082"
-	maxMessageSize = 64 * 1024
+	listenAddress                = "127.0.0.1:16082"
+	maxMessageSize               = 64 * 1024
+	maxConcurrentAuthentications = 8
+	maxConcurrentShells          = 4
+	authenticationTimeout        = 10 * time.Second
+	firstMessageTimeout          = 30 * time.Second
+	websocketPongWait            = 70 * time.Second
+	websocketPingPeriod          = 30 * time.Second
+	synoTokenProtocolPrefix      = "diskshell.syno-token."
+)
+
+var (
+	authenticationSlots = make(chan struct{}, maxConcurrentAuthentications)
+	shellSlots          = make(chan struct{}, maxConcurrentShells)
 )
 
 type clientMessage struct {
@@ -107,19 +121,42 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "Forbidden.", http.StatusForbidden)
 		return
 	}
-	account, err := authenticate(request)
+	token, selectedProtocol, err := synoTokenFromSubprotocol(request)
 	if err != nil {
+		http.Error(response, "Forbidden.", http.StatusForbidden)
+		return
+	} else if token != "" {
+		request.Header.Set("X-Syno-Token", token)
+	}
+	account, err := authenticateWithSlot(request)
+	if err != nil {
+		if errors.Is(err, errServiceBusy) {
+			http.Error(response, "The terminal service is busy.", http.StatusServiceUnavailable)
+			return
+		}
 		log.Printf("Terminal authentication rejected: %v", err)
 		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
 		return
 	}
+	if !acquireSlot(shellSlots) {
+		http.Error(response, "The terminal service is busy.", http.StatusServiceUnavailable)
+		return
+	}
+	defer releaseSlot(shellSlots)
 
-	connection, err := upgrader.Upgrade(response, request, nil)
+	upgradeHeader := make(http.Header)
+	if selectedProtocol != "" {
+		upgradeHeader.Set("Sec-WebSocket-Protocol", selectedProtocol)
+	}
+	connection, err := upgrader.Upgrade(response, request, upgradeHeader)
 	if err != nil {
 		return
 	}
 	defer connection.Close()
 	connection.SetReadLimit(maxMessageSize)
+	_ = connection.SetReadDeadline(time.Now().Add(firstMessageTimeout))
+	pingFinished := make(chan struct{})
+	defer close(pingFinished)
 
 	command := exec.Command("/bin/sh", "-l")
 	command.Dir = account.home
@@ -141,11 +178,11 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer terminalFile.Close()
-	defer func() { _ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL) }()
 
 	outputFinished := make(chan struct{})
 	go func() {
 		defer close(outputFinished)
+		defer connection.Close()
 		buffer := make([]byte, 16*1024)
 		for {
 			count, readError := terminalFile.Read(buffer)
@@ -161,15 +198,26 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 		}
 	}()
 
+	livenessStarted := false
+
+terminalLoop:
 	for {
 		var message clientMessage
 		if err := connection.ReadJSON(&message); err != nil {
 			break
 		}
+		if !livenessStarted {
+			livenessStarted = true
+			connection.SetPongHandler(func(string) error {
+				return connection.SetReadDeadline(time.Now().Add(websocketPongWait))
+			})
+			_ = connection.SetReadDeadline(time.Now().Add(websocketPongWait))
+			go pingWebSocket(connection, pingFinished)
+		}
 		switch message.Type {
 		case "input":
 			if len(message.Data) > maxMessageSize {
-				return
+				break terminalLoop
 			}
 			_, _ = terminalFile.Write([]byte(message.Data))
 		case "resize":
@@ -177,19 +225,39 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 				_ = pty.Setsize(terminalFile, &pty.Winsize{Cols: message.Cols, Rows: message.Rows})
 			}
 		default:
-			return
+			break terminalLoop
 		}
 	}
 
 	_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+	// Do not reap the process before the final group signal: keeping the leader
+	// unreaped prevents its PID/process-group ID from being reused meanwhile.
+	<-time.After(2 * time.Second)
+	_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	_ = command.Wait()
 	select {
 	case <-outputFinished:
 	case <-time.After(2 * time.Second):
 	}
-	_ = command.Wait()
+}
+
+var errServiceBusy = errors.New("terminal service is busy")
+
+func authenticateWithSlot(request *http.Request) (*identity, error) {
+	if !acquireSlot(authenticationSlots) {
+		return nil, errServiceBusy
+	}
+	defer releaseSlot(authenticationSlots)
+	return authenticate(request)
 }
 
 func authenticate(request *http.Request) (*identity, error) {
+	ctx, cancel := context.WithTimeout(request.Context(), authenticationTimeout)
+	defer cancel()
+	return authenticateContext(ctx, request)
+}
+
+func authenticateContext(ctx context.Context, request *http.Request) (*identity, error) {
 	authenticateCGI := "/usr/syno/synoman/webman/modules/authenticate.cgi"
 	idBinary := "/usr/bin/id"
 	// Never honor path overrides while this installed setuid program is running
@@ -203,8 +271,9 @@ func authenticate(request *http.Request) (*identity, error) {
 		}
 	}
 
-	command := exec.Command(authenticateCGI)
+	command := exec.CommandContext(ctx, authenticateCGI)
 	command.Env = cgiEnvironment(request)
+	command.WaitDelay = time.Second
 	output, err := command.Output()
 	if err != nil {
 		return nil, fmt.Errorf("DSM session lookup failed: %w", err)
@@ -213,7 +282,9 @@ func authenticate(request *http.Request) (*identity, error) {
 	if !validUsername(username) {
 		return nil, errors.New("DSM session lookup returned no valid account")
 	}
-	groups, err := exec.Command(idBinary, "-Gn", username).Output()
+	groupsCommand := exec.CommandContext(ctx, idBinary, "-Gn", username)
+	groupsCommand.WaitDelay = time.Second
+	groups, err := groupsCommand.Output()
 	if err != nil {
 		return nil, fmt.Errorf("DSM group lookup failed: %w", err)
 	}
@@ -232,7 +303,9 @@ func authenticate(request *http.Request) (*identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	groupIDs, err := exec.Command(idBinary, "-G", username).Output()
+	groupIDsCommand := exec.CommandContext(ctx, idBinary, "-G", username)
+	groupIDsCommand.WaitDelay = time.Second
+	groupIDs, err := groupIDsCommand.Output()
 	if err != nil {
 		return nil, fmt.Errorf("DSM numeric group lookup failed: %w", err)
 	}
@@ -242,6 +315,54 @@ func authenticate(request *http.Request) (*identity, error) {
 	}
 	home := shellHome(account.HomeDir)
 	return &identity{username: username, uid: uid, gid: gid, groups: numericGroups, home: home}, nil
+}
+
+func synoTokenFromSubprotocol(request *http.Request) (string, string, error) {
+	for _, protocol := range websocket.Subprotocols(request) {
+		if !strings.HasPrefix(protocol, synoTokenProtocolPrefix) {
+			continue
+		}
+		encoded := strings.TrimPrefix(protocol, synoTokenProtocolPrefix)
+		decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil || len(decoded) == 0 || len(decoded) > 4096 {
+			return "", "", errors.New("invalid SynoToken subprotocol")
+		}
+		for _, character := range decoded {
+			if character < 0x21 || character == 0x7f {
+				return "", "", errors.New("invalid SynoToken characters")
+			}
+		}
+		return string(decoded), protocol, nil
+	}
+	return "", "", nil
+}
+
+func acquireSlot(slots chan struct{}) bool {
+	select {
+	case slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseSlot(slots chan struct{}) {
+	<-slots
+}
+
+func pingWebSocket(connection *websocket.Conn, finished <-chan struct{}) {
+	ticker := time.NewTicker(websocketPingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				return
+			}
+		case <-finished:
+			return
+		}
+	}
 }
 
 func cgiEnvironment(request *http.Request) []string {

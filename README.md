@@ -7,6 +7,10 @@ authenticated DSM account through a pseudo-terminal.
 
 ## Local build
 
+Building installable packages requires Go 1.26 or newer. Set
+`DISKSHELL_GO_BINARY` to an explicit Go executable when multiple toolchains are
+installed.
+
 ```sh
 npm install
 npm run check

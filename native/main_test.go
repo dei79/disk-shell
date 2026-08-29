@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"net/http/httptest"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAllowedOrigin(t *testing.T) {
@@ -19,6 +21,19 @@ func TestAllowedOrigin(t *testing.T) {
 	request.Header.Set("Origin", "https://attacker.example")
 	if allowedOrigin(request) {
 		t.Fatal("cross-origin websocket must be rejected")
+	}
+}
+
+func TestSynoTokenFromSubprotocol(t *testing.T) {
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	request.Header.Set("Sec-WebSocket-Protocol", "diskshell.syno-token.c2FmZS10b2tlbg")
+	token, protocol, err := synoTokenFromSubprotocol(request)
+	if err != nil || token != "safe-token" || protocol != "diskshell.syno-token.c2FmZS10b2tlbg" {
+		t.Fatalf("unexpected SynoToken result %q with protocol %q: %v", token, protocol, err)
+	}
+	request.Header.Set("Sec-WebSocket-Protocol", "diskshell.syno-token.invalid!")
+	if _, _, err := synoTokenFromSubprotocol(request); err == nil {
+		t.Fatal("invalid SynoToken encoding was accepted")
 	}
 }
 
@@ -136,6 +151,85 @@ func TestTerminalRejectsCrossOriginBeforeAuthentication(t *testing.T) {
 	}
 }
 
+func TestTerminalRejectsWhenAuthenticationCapacityIsExhausted(t *testing.T) {
+	fillSlots(t, authenticationSlots)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	request.Host = "dsm.local"
+	request.Header.Set("Origin", "http://dsm.local")
+	response := httptest.NewRecorder()
+	terminal(response, request)
+	if response.Code != 503 {
+		t.Fatalf("exhausted authentication capacity returned HTTP %d", response.Code)
+	}
+}
+
+func TestTerminalRejectsWhenShellCapacityIsExhausted(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Skipf("current account is unavailable: %v", err)
+	}
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+	fillSlots(t, shellSlots)
+
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	request.Host = "dsm.local"
+	request.Header.Set("Origin", "http://dsm.local")
+	response := httptest.NewRecorder()
+	terminal(response, request)
+	if response.Code != 503 {
+		t.Fatalf("exhausted shell capacity returned HTTP %d", response.Code)
+	}
+}
+
+func TestAuthenticationContextCancelsHungCGI(t *testing.T) {
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nexec sleep 5\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nexit 1\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	ctx, cancel := context.WithTimeout(request.Context(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := authenticateContext(ctx, request); err == nil {
+		t.Fatal("hung authentication unexpectedly succeeded")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("authentication cancellation took %s", elapsed)
+	}
+}
+
+func TestAuthenticationSlotIsReleasedAfterFailure(t *testing.T) {
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nexit 1\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nexit 1\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	if _, err := authenticateWithSlot(request); err == nil {
+		t.Fatal("invalid authentication unexpectedly succeeded")
+	}
+	if len(authenticationSlots) != 0 {
+		t.Fatal("authentication slot was not released after failure")
+	}
+}
+
+func TestShellSlotIsReleasedAfterUpgradeFailure(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Skipf("current account is unavailable: %v", err)
+	}
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
+	request.Host = "dsm.local"
+	request.Header.Set("Origin", "http://dsm.local")
+	response := httptest.NewRecorder()
+	terminal(response, request)
+	if len(shellSlots) != 0 {
+		t.Fatal("shell slot was not released after WebSocket upgrade failure")
+	}
+}
+
 func configureDevelopmentAuthentication(t *testing.T, authenticateCGI, idBinary string) {
 	t.Helper()
 	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
@@ -150,4 +244,19 @@ func writeTestExecutable(t *testing.T, name, contents string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func fillSlots(t *testing.T, slots chan struct{}) {
+	t.Helper()
+	capacity := cap(slots)
+	for index := 0; index < capacity; index++ {
+		if !acquireSlot(slots) {
+			t.Fatal("slot capacity was already in use")
+		}
+	}
+	t.Cleanup(func() {
+		for index := 0; index < capacity; index++ {
+			releaseSlot(slots)
+		}
+	})
 }

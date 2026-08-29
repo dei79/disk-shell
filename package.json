@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test test/*.test.mjs && go test ./native"
+    "test": "node --test test/*.test.mjs && node test/run-go.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",

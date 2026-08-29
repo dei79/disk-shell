@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -55,9 +55,40 @@ test("keeps terminal authentication and transport boundaries explicit", () => {
   assert.match(backend, /SetReadLimit\(maxMessageSize\)/u);
   assert.match(backend, /syscall\.Credential/u);
   assert.match(backend, /os\.Getuid\(\) == os\.Geteuid\(\)/u);
-  assert.doesNotMatch(backend, /SetReadDeadline/u);
+  assert.match(backend, /context\.WithTimeout/u);
+  assert.match(backend, /CommandContext/u);
+  assert.match(backend, /SetReadDeadline/u);
+  assert.match(backend, /SetPongHandler/u);
+  assert.match(backend, /maxConcurrentShells/u);
+  assert.match(backend, /upgradeHeader\.Set\("Sec-WebSocket-Protocol", selectedProtocol\)/u);
   assert.doesNotMatch(backend, /command\.Env = append\(os\.Environ/u);
   assert.doesNotMatch(backend, /exec\.Command\([^\n]*message\.Data/u);
+});
+
+test("requires a supported Go toolchain for package builds", () => {
+  const directory = mkdtempSync(join(tmpdir(), "diskshell-old-go-"));
+  try {
+    const fakeGo = join(directory, "go");
+    writeFileSync(fakeGo, "#!/bin/sh\nprintf 'go version go1.25.9 darwin/arm64\\n'\n");
+    chmodSync(fakeGo, 0o700);
+    const result = spawnSync(process.execPath, [join(integration, "build.mjs")], {
+      cwd: integration,
+      encoding: "utf8",
+      env: { ...process.env, DISKSHELL_GO_BINARY: fakeGo },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires Go 1\.26\.0 or newer/u);
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("prevents DSM tokens from entering nginx access logs", () => {
+  const nginx = readFileSync(join(integration, "payload/nginx/diskshell.conf"), "utf8");
+  const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
+  assert.match(nginx, /access_log\s+off;/u);
+  assert.doesNotMatch(socket, /\?SynoToken=/u);
+  assert.match(socket, /diskshell\.syno-token\./u);
 });
 
 test("sends the fitted terminal size as soon as the websocket opens", () => {

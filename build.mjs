@@ -20,12 +20,29 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const metadata = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
+const goBinary = process.env.DISKSHELL_GO_BINARY || "go";
+const minimumGoVersion = [1, 26, 0];
 const packageRevision = process.env.DISKSHELL_PACKAGE_REVISION || "13";
 const spkVersion = `${metadata.version}-${packageRevision}`;
 const buildRoot = join(here, "build");
 const staging = join(buildRoot, "staging");
 const payload = join(buildRoot, "payload");
 const output = join(buildRoot, `DiskShell-${spkVersion}.spk`);
+
+function assertSupportedGoVersion() {
+  const output = execFileSync(goBinary, ["version"], { encoding: "utf8" }).trim();
+  const match = /\bgo(\d+)\.(\d+)(?:\.(\d+))?\b/u.exec(output);
+  if (!match) throw new Error(`Unable to determine the Go version from: ${output}`);
+  const actual = match.slice(1).map((value) => Number(value || 0));
+  const supported = actual.some((value, index) => value > minimumGoVersion[index]
+    && actual.slice(0, index).every((part, partIndex) => part === minimumGoVersion[partIndex]))
+    || actual.every((value, index) => value === minimumGoVersion[index]);
+  if (!supported) {
+    throw new Error(`DiskShell requires Go ${minimumGoVersion.join(".")} or newer; found ${actual.join(".")}.`);
+  }
+}
+
+assertSupportedGoVersion();
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -133,7 +150,7 @@ delete config["DiskShell.js"];
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
 mkdirSync(join(payload, "bin"), { recursive: true });
-execFileSync("go", ["build", "-trimpath", "-ldflags=-s -w -buildid=", "-o", join(payload, "bin/diskshell-server"), "./native"], {
+execFileSync(goBinary, ["build", "-trimpath", "-ldflags=-s -w -buildid=", "-o", join(payload, "bin/diskshell-server"), "./native"], {
   cwd: here,
   env: { ...process.env, CGO_ENABLED: "0", GOARCH: "amd64", GOOS: "linux" },
   stdio: "inherit",
