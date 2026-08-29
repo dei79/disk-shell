@@ -1,0 +1,20 @@
+{
+  "web-config": {
+    "nginx-static-config": {
+      "enable": [
+        {
+          "type": "dsm",
+          "relpath": "nginx/dsm-terminal.conf",
+          "ports": [
+            {
+              "port": 16082,
+              "protocol": "tcp",
+              "schema": "http"
+            }
+          ],
+          "alias": ["dsm-terminal"]
+        }
+      ]
+    }
+  }
+}

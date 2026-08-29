@@ -1,0 +1,20 @@
+{
+  "name": "bursula-dsm-terminal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test test/*.test.mjs && go test ./native"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "sass": "1.103.1",
+    "typescript": "7.0.2"
+  }
+}

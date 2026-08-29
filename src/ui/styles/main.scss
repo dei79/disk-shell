@@ -1,0 +1,108 @@
+@use "tokens" as *;
+
+.dsm-terminal-shell {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  color: $text;
+  background: $background;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dsm-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 58px;
+  padding: 8px 14px;
+  border-bottom: 1px solid $border;
+  background: $panel;
+
+  > div:first-child {
+    display: grid;
+    gap: 2px;
+  }
+
+  strong { font-size: 14px; }
+  span { color: $muted; font-size: 12px; }
+}
+
+.dsm-terminal-actions {
+  display: flex;
+  gap: 8px;
+
+  button {
+    min-height: 30px;
+    padding: 0 12px;
+    border: 1px solid $border;
+    border-radius: 5px;
+    color: $text;
+    background: $panel-raised;
+    cursor: pointer;
+
+    &:hover:not(:disabled) { border-color: $accent-hover; }
+    &:focus-visible { outline: 2px solid $accent-hover; outline-offset: 2px; }
+    &:disabled { opacity: .45; cursor: default; }
+    &.primary { border-color: $accent; background: $accent; }
+  }
+}
+
+.dsm-terminal-alert {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba($danger, .45);
+  color: #ffd4d4;
+  background: rgba($danger, .12);
+  font-size: 12px;
+}
+
+.dsm-terminal-canvas {
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  background: $background;
+
+  .xterm { height: 100%; }
+  .xterm-viewport { scrollbar-color: $border $background; }
+}
+
+.dsm-terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-top: 1px solid $border;
+  color: $muted;
+  background: $panel;
+  font-size: 11px;
+}
+
+.dsm-terminal-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: $muted;
+
+  &.connected { background: $success; box-shadow: 0 0 0 3px rgba($success, .12); }
+  &.connecting { background: #f1c75b; }
+  &.error { background: $danger; }
+}
+
+.dsm-terminal-status-hint {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .dsm-terminal-toolbar { align-items: flex-start; }
+  .dsm-terminal-toolbar > div:first-child span { display: none; }
+  .dsm-terminal-status-hint { display: none; }
+}

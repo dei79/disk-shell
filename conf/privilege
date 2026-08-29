@@ -1,0 +1,15 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "DSMTerminal",
+  "groupname": "DSMTerminal",
+  "tool": [
+    {
+      "relpath": "bin/dsm-terminal-server",
+      "user": "root",
+      "group": "package",
+      "permission": "4750"
+    }
+  ]
+}

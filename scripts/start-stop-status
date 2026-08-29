@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+server="${SYNOPKG_PKGDEST}/bin/dsm-terminal-server"
+runtime="${SYNOPKG_PKGVAR}/runtime"
+pid_file="${runtime}/server.pid"
+log_file="${runtime}/server.log"
+
+running() {
+  [ -f "${pid_file}" ] || return 1
+  pid="$(cat "${pid_file}" 2>/dev/null || true)"
+  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+}
+
+case "${1:-}" in
+  start)
+    if running; then exit 0; fi
+    mkdir -p "${runtime}" "${SYNOPKG_PKGVAR}/home"
+    rm -f "${pid_file}"
+    HOME="${SYNOPKG_PKGVAR}/home" nohup "${server}" >"${log_file}" 2>&1 &
+    pid=$!
+    echo "${pid}" >"${pid_file}"
+    sleep 1
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      rm -f "${pid_file}"
+      exit 1
+    fi
+    ;;
+  stop)
+    if running; then
+      pid="$(cat "${pid_file}")"
+      kill "${pid}" 2>/dev/null || true
+      count=0
+      while kill -0 "${pid}" 2>/dev/null && [ "${count}" -lt 20 ]; do
+        sleep 1
+        count=$((count + 1))
+      done
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${pid_file}"
+    ;;
+  status)
+    running
+    ;;
+  *)
+    exit 1
+    ;;
+esac

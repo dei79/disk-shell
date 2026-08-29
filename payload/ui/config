@@ -1,0 +1,14 @@
+{
+  "DSMTerminal.js": {
+    "SYNO.SDS.App.DSMTerminal.Instance": {
+      "type": "app",
+      "title": "Terminal",
+      "appWindow": "SYNO.SDS.App.DSMTerminal.Instance",
+      "allUsers": false,
+      "allowMultiInstance": false,
+      "hidden": false,
+      "icon": "images/icon_{0}.png",
+      "depend": []
+    }
+  }
+}
