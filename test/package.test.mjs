@@ -9,15 +9,15 @@ const integration = resolve(import.meta.dirname, "..");
 const packageVersion = JSON.parse(readFileSync(join(integration, "package.json"), "utf8")).version;
 const testRevision = "900000";
 
-test("builds a self-contained DSM Terminal SPK", () => {
+test("builds a self-contained DiskShell SPK", () => {
   const output = execFileSync(process.execPath, [join(integration, "build.mjs")], {
     cwd: integration,
     encoding: "utf8",
-    env: { ...process.env, DSM_TERMINAL_PACKAGE_REVISION: testRevision },
+    env: { ...process.env, DISKSHELL_PACKAGE_REVISION: testRevision },
   }).trim();
   const spk = join(integration, output);
   assert.equal(existsSync(spk), true);
-  const extraction = mkdtempSync(join(tmpdir(), "dsm-terminal-test-"));
+  const extraction = mkdtempSync(join(tmpdir(), "diskshell-test-"));
   try {
     execFileSync("tar", ["-xf", spk, "-C", extraction]);
     const outer = execFileSync("tar", ["-tf", spk], { encoding: "utf8" });
@@ -26,16 +26,20 @@ test("builds a self-contained DSM Terminal SPK", () => {
     }
     const payload = execFileSync("tar", ["-tzf", join(extraction, "package.tgz")], { encoding: "utf8" });
     for (const entry of [
-      "bin/dsm-terminal-server",
-      "nginx/dsm-terminal.conf",
-      `ui/DSMTerminal-${packageVersion}-${testRevision}.js`,
-      `ui/DSMTerminal-${packageVersion}-${testRevision}.css`,
+      "bin/diskshell-server",
+      "nginx/diskshell.conf",
+      `ui/DiskShell-${packageVersion}-${testRevision}.js`,
+      `ui/DiskShell-${packageVersion}-${testRevision}.css`,
       "ui/config",
       "ui/images/icon_64.png",
     ]) assert.match(payload, new RegExp(`^${entry}$`, "mu"));
-    assert.match(readFileSync(join(extraction, "INFO"), "utf8"), new RegExp(`version="${packageVersion}-${testRevision}"`, "u"));
+    const info = readFileSync(join(extraction, "INFO"), "utf8");
+    assert.match(info, /^package="DiskShell"$/mu);
+    assert.match(info, /^displayname="DiskShell"$/mu);
+    assert.match(info, /^dsmappname="SYNO\.SDS\.App\.DiskShell\.Instance"$/mu);
+    assert.match(info, new RegExp(`version="${packageVersion}-${testRevision}"`, "u"));
     const privilege = JSON.parse(readFileSync(join(extraction, "conf/privilege"), "utf8"));
-    assert.ok(privilege.tool.some((tool) => tool.relpath === "bin/dsm-terminal-server" && tool.user === "root" && tool.permission === "4750"));
+    assert.ok(privilege.tool.some((tool) => tool.relpath === "bin/diskshell-server" && tool.user === "root" && tool.permission === "4750"));
     const resource = JSON.parse(readFileSync(join(extraction, "conf/resource"), "utf8"));
     assert.equal("systemd-user-unit" in resource, false);
   } finally {
@@ -70,15 +74,15 @@ test("fits the terminal from container-driven DSM window resizes", () => {
   const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
   assert.match(view, /ResizeObserver\(\(\) => this\.scheduleFit\(\)\)/u);
   assert.match(view, /requestAnimationFrame/u);
-  assert.match(styles, /container:\s*dsm-terminal\s*\/\s*inline-size/u);
-  assert.match(styles, /@container dsm-terminal \(max-width: 520px\)/u);
+  assert.match(styles, /container:\s*diskshell\s*\/\s*inline-size/u);
+  assert.match(styles, /@container diskshell \(max-width: 520px\)/u);
   assert.doesNotMatch(styles, /min-height:\s*420px/u);
 });
 
 test("keeps the status bar compact when the optional alert is absent", () => {
   const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
-  assert.match(styles, /\.dsm-terminal-toolbar\s*\{[^}]*grid-row:\s*1/u);
-  assert.match(styles, /\.dsm-terminal-alert\s*\{[^}]*grid-row:\s*2/u);
-  assert.match(styles, /\.dsm-terminal-canvas\s*\{[^}]*grid-row:\s*3/u);
-  assert.match(styles, /\.dsm-terminal-status\s*\{[^}]*grid-row:\s*4/u);
+  assert.match(styles, /\.diskshell-toolbar\s*\{[^}]*grid-row:\s*1/u);
+  assert.match(styles, /\.diskshell-alert\s*\{[^}]*grid-row:\s*2/u);
+  assert.match(styles, /\.diskshell-canvas\s*\{[^}]*grid-row:\s*3/u);
+  assert.match(styles, /\.diskshell-status\s*\{[^}]*grid-row:\s*4/u);
 });

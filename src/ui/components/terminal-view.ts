@@ -24,17 +24,17 @@ type TerminalView = {
 export const terminalViewComponent = {
   components: { "terminal-status-bar": statusBarComponent },
   template: [
-    '<section class="dsm-terminal-shell">',
-    '  <header class="dsm-terminal-toolbar">',
-    '    <div><strong>DSM Terminal</strong><span>{{ text.subtitle }}</span></div>',
-    '    <div class="dsm-terminal-actions">',
+    '<section class="diskshell-shell">',
+    '  <header class="diskshell-toolbar">',
+    '    <div><strong>DiskShell</strong><span>{{ text.subtitle }}</span></div>',
+    '    <div class="diskshell-actions">',
     '      <button type="button" @click="copySelection" :disabled="!connected">{{ text.copy }}</button>',
     '      <button type="button" @click="pasteClipboard" :disabled="!connected">{{ text.paste }}</button>',
     '      <button type="button" class="primary" @click="connect" v-if="!connected">{{ text.reconnect }}</button>',
     '    </div>',
     '  </header>',
-    '  <div v-if="errorMessage" class="dsm-terminal-alert" role="alert">{{ errorMessage }}</div>',
-    '  <div ref="terminal" class="dsm-terminal-canvas" :aria-label="text.terminalAriaLabel"></div>',
+    '  <div v-if="errorMessage" class="diskshell-alert" role="alert">{{ errorMessage }}</div>',
+    '  <div ref="terminal" class="diskshell-canvas" :aria-label="text.terminalAriaLabel"></div>',
     '  <terminal-status-bar :state="connectionState" :text="text"></terminal-status-bar>',
     '</section>',
   ].join(""),
@@ -94,7 +94,7 @@ export const terminalViewComponent = {
       this.connectionState = "connecting";
       this.errorMessage = "";
       this.terminal?.clear();
-      this.terminal?.write(`\x1b[38;5;81mDSM Terminal\x1b[0m – ${this.text.connectingTerminal}\r\n`);
+      this.terminal?.write(`\x1b[38;5;81mDiskShell\x1b[0m – ${this.text.connectingTerminal}\r\n`);
       this.terminalSocket = new TerminalSocket({
         onOpen: () => {
           this.connectionState = "connected";

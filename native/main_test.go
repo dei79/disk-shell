@@ -10,7 +10,7 @@ import (
 )
 
 func TestAllowedOrigin(t *testing.T) {
-	request := httptest.NewRequest("GET", "http://dsm.local/dsm-terminal/ws", nil)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
 	request.Host = "dsm.local"
 	request.Header.Set("Origin", "https://dsm.local")
 	if !allowedOrigin(request) {
@@ -29,7 +29,7 @@ func TestDimensions(t *testing.T) {
 }
 
 func TestCGIEnvironment(t *testing.T) {
-	request := httptest.NewRequest("GET", "http://dsm.local/dsm-terminal/ws?SynoToken=safe-token", nil)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws?SynoToken=safe-token", nil)
 	request.Host = "dsm.local"
 	request.RemoteAddr = "192.0.2.3:40000"
 	request.Header.Set("Cookie", "id=abc")
@@ -51,7 +51,7 @@ func TestCGIEnvironment(t *testing.T) {
 		}
 	}
 	for _, value := range values {
-		if strings.HasPrefix(value, "DSM_TERMINAL_") {
+		if strings.HasPrefix(value, "DISKSHELL_") {
 			t.Fatalf("inherited service environment leaked into CGI: %q", value)
 		}
 	}
@@ -64,7 +64,7 @@ func TestDevelopmentOverridesRequireMatchingRealAndEffectiveIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), `os.Getuid() == os.Geteuid() && os.Getenv("DSM_TERMINAL_DEVELOPMENT") == "1"`) {
+	if !strings.Contains(string(source), `os.Getuid() == os.Geteuid() && os.Getenv("DISKSHELL_DEVELOPMENT") == "1"`) {
 		t.Fatal("development overrides are not guarded against setuid execution")
 	}
 }
@@ -97,7 +97,7 @@ func TestTerminalRejectsInvalidSession(t *testing.T) {
 	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nexit 1\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
-	request := httptest.NewRequest("GET", "http://dsm.local/dsm-terminal/ws", nil)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
 	request.Host = "dsm.local"
 	request.Header.Set("Origin", "http://dsm.local")
 	response := httptest.NewRecorder()
@@ -115,7 +115,7 @@ func TestTerminalRejectsNonAdministrator(t *testing.T) {
 	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo users; else echo 20; fi\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
-	request := httptest.NewRequest("GET", "http://dsm.local/dsm-terminal/ws", nil)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
 	request.Host = "dsm.local"
 	request.Header.Set("Origin", "http://dsm.local")
 	response := httptest.NewRecorder()
@@ -126,7 +126,7 @@ func TestTerminalRejectsNonAdministrator(t *testing.T) {
 }
 
 func TestTerminalRejectsCrossOriginBeforeAuthentication(t *testing.T) {
-	request := httptest.NewRequest("GET", "http://dsm.local/dsm-terminal/ws", nil)
+	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
 	request.Host = "dsm.local"
 	request.Header.Set("Origin", "https://attacker.example")
 	response := httptest.NewRecorder()
@@ -138,9 +138,9 @@ func TestTerminalRejectsCrossOriginBeforeAuthentication(t *testing.T) {
 
 func configureDevelopmentAuthentication(t *testing.T, authenticateCGI, idBinary string) {
 	t.Helper()
-	t.Setenv("DSM_TERMINAL_DEVELOPMENT", "1")
-	t.Setenv("DSM_TERMINAL_AUTHENTICATE_CGI", authenticateCGI)
-	t.Setenv("DSM_TERMINAL_ID_BIN", idBinary)
+	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
+	t.Setenv("DISKSHELL_AUTHENTICATE_CGI", authenticateCGI)
+	t.Setenv("DISKSHELL_ID_BIN", idBinary)
 }
 
 func writeTestExecutable(t *testing.T, name, contents string) string {

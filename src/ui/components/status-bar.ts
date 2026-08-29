@@ -11,10 +11,10 @@ export const statusBarComponent = {
     },
   },
   template: [
-    '<div class="dsm-terminal-status" role="status" aria-live="polite">',
-    '  <span class="dsm-terminal-status-dot" :class="state" aria-hidden="true"></span>',
+    '<div class="diskshell-status" role="status" aria-live="polite">',
+    '  <span class="diskshell-status-dot" :class="state" aria-hidden="true"></span>',
     '  <span>{{ label }}</span>',
-    '  <span class="dsm-terminal-status-hint">{{ text.sessionHint }}</span>',
+    '  <span class="diskshell-status-hint">{{ text.sessionHint }}</span>',
     '</div>',
   ].join(""),
 };

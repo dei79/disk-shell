@@ -1,4 +1,4 @@
-module bursula.local/dsm-terminal
+module bursula.local/diskshell
 
 go 1.17
 

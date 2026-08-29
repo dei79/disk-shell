@@ -1,4 +1,4 @@
-# DSM Terminal
+# DiskShell
 
 Native DSM 7.2 desktop terminal packaged as an SPK. The browser UI is written in
 TypeScript and SCSS and uses xterm.js. A small Go service authenticates the active
@@ -14,12 +14,12 @@ npm test
 npm run build
 ```
 
-The SPK is written to `build/DSMTerminal-<version>-<revision>.spk`. Increment
+The SPK is written to `build/DiskShell-<version>-<revision>.spk`. Increment
 the default `packageRevision` in `build.mjs` before creating another installable package build so DSM does
 not reuse cached desktop assets.
 
 The service listens only on `127.0.0.1:16082`. DSM's nginx proxy exposes the
-WebSocket under `/dsm-terminal/`; it is not a separately published network port.
+WebSocket under `/diskshell/`; it is not a separately published network port.
 
 ## Live DSM verification
 
@@ -30,9 +30,9 @@ file, build a new package revision, and install the SPK through Package Center o
 
 After installation:
 
-1. Confirm `/dsm-terminal/health` returns `{"status":"ok"}` through the DSM URL.
-2. Open **Terminal** from the DSM main menu as an administrator and run
-   `printf '__DSM_TERMINAL_OK__\\n'; id -un; stty size`.
+1. Confirm `/diskshell/health` returns `{"status":"ok"}` through the DSM URL.
+2. Open **DiskShell** from the DSM main menu as an administrator and run
+   `printf '__DISKSHELL_OK__\\n'; id -un; stty size`.
 3. Verify the marker, the logged-in DSM account, and a non-zero terminal size are
    printed, then resize the window and run `stty size` again.
 4. Verify a same-host request without a DSM session gets HTTP 401 and a request

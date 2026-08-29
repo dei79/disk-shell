@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-server="${SYNOPKG_PKGDEST}/bin/dsm-terminal-server"
+server="${SYNOPKG_PKGDEST}/bin/diskshell-server"
 runtime="${SYNOPKG_PKGVAR}/runtime"
 pid_file="${runtime}/server.pid"
 log_file="${runtime}/server.log"

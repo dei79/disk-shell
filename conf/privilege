@@ -2,11 +2,11 @@
   "defaults": {
     "run-as": "package"
   },
-  "username": "DSMTerminal",
-  "groupname": "DSMTerminal",
+  "username": "DiskShell",
+  "groupname": "DiskShell",
   "tool": [
     {
-      "relpath": "bin/dsm-terminal-server",
+      "relpath": "bin/diskshell-server",
       "user": "root",
       "group": "package",
       "permission": "4750"

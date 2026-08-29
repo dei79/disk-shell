@@ -58,12 +58,12 @@ var upgrader = websocket.Upgrader{
 
 func main() {
 	if os.Geteuid() != 0 {
-		log.Fatal("dsm-terminal-server must be installed with its DSM setuid privilege")
+		log.Fatal("diskshell-server must be installed with its DSM setuid privilege")
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/dsm-terminal/health", health)
-	mux.HandleFunc("/dsm-terminal/ws", terminal)
+	mux.HandleFunc("/diskshell/health", health)
+	mux.HandleFunc("/diskshell/ws", terminal)
 	server := &http.Server{
 		Addr:              listenAddress,
 		Handler:           securityHeaders(mux),
@@ -78,7 +78,7 @@ func main() {
 		_ = server.Close()
 	}()
 
-	log.Printf("DSM Terminal listening on %s", listenAddress)
+	log.Printf("DiskShell listening on %s", listenAddress)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -194,11 +194,11 @@ func authenticate(request *http.Request) (*identity, error) {
 	idBinary := "/usr/bin/id"
 	// Never honor path overrides while this installed setuid program is running
 	// with more privilege than its caller. They are only for unprivileged tests.
-	if os.Getuid() == os.Geteuid() && os.Getenv("DSM_TERMINAL_DEVELOPMENT") == "1" {
-		if value := os.Getenv("DSM_TERMINAL_AUTHENTICATE_CGI"); value != "" {
+	if os.Getuid() == os.Geteuid() && os.Getenv("DISKSHELL_DEVELOPMENT") == "1" {
+		if value := os.Getenv("DISKSHELL_AUTHENTICATE_CGI"); value != "" {
 			authenticateCGI = value
 		}
-		if value := os.Getenv("DSM_TERMINAL_ID_BIN"); value != "" {
+		if value := os.Getenv("DISKSHELL_ID_BIN"); value != "" {
 			idBinary = value
 		}
 	}

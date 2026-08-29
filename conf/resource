@@ -4,7 +4,7 @@
       "enable": [
         {
           "type": "dsm",
-          "relpath": "nginx/dsm-terminal.conf",
+          "relpath": "nginx/diskshell.conf",
           "ports": [
             {
               "port": 16082,
@@ -12,7 +12,7 @@
               "schema": "http"
             }
           ],
-          "alias": ["dsm-terminal"]
+          "alias": ["diskshell"]
         }
       ]
     }

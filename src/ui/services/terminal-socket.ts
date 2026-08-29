@@ -18,7 +18,7 @@ export class TerminalSocket {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = currentSynoToken();
     const query = token ? `?SynoToken=${encodeURIComponent(token)}` : "";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/dsm-terminal/ws${query}`);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/diskshell/ws${query}`);
     this.socket = socket;
     socket.addEventListener("open", () => this.events.onOpen());
     socket.addEventListener("close", () => this.events.onClose());
@@ -53,7 +53,7 @@ export class TerminalSocket {
 function currentSynoToken(): string {
   const scripts = Array.from(document.scripts);
   const source = document.currentScript?.getAttribute("src")
-    || scripts.reverse().find((script) => script.src.includes("DSMTerminal-"))?.src
+    || scripts.reverse().find((script) => script.src.includes("DiskShell-"))?.src
     || "";
   if (!source) return "";
   try {

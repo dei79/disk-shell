@@ -20,12 +20,12 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const metadata = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
-const packageRevision = process.env.DSM_TERMINAL_PACKAGE_REVISION || "13";
+const packageRevision = process.env.DISKSHELL_PACKAGE_REVISION || "13";
 const spkVersion = `${metadata.version}-${packageRevision}`;
 const buildRoot = join(here, "build");
 const staging = join(buildRoot, "staging");
 const payload = join(buildRoot, "payload");
-const output = join(buildRoot, `DSMTerminal-${spkVersion}.spk`);
+const output = join(buildRoot, `DiskShell-${spkVersion}.spk`);
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -104,8 +104,8 @@ cpSync(join(here, "scripts"), join(staging, "scripts"), { recursive: true });
 cpSync(join(here, "payload"), payload, { recursive: true });
 copyFileSync(join(here, "LICENSE"), join(staging, "LICENSE"));
 
-const scriptName = `DSMTerminal-${spkVersion}.js`;
-const styleName = `DSMTerminal-${spkVersion}.css`;
+const scriptName = `DiskShell-${spkVersion}.js`;
+const styleName = `DiskShell-${spkVersion}.css`;
 await build({
   entryPoints: [join(here, "src/ui/app.ts")],
   outfile: join(payload, "ui", scriptName),
@@ -124,23 +124,23 @@ writeFileSync(join(payload, "ui", styleName), `${xtermStyles}\n${applicationStyl
 const scriptPath = join(payload, "ui", scriptName);
 writeFileSync(
   scriptPath,
-  readFileSync(scriptPath, "utf8").replace("webman/3rdparty/DSMTerminal/style.css", `webman/3rdparty/DSMTerminal/${styleName}`),
+  readFileSync(scriptPath, "utf8").replace("webman/3rdparty/DiskShell/style.css", `webman/3rdparty/DiskShell/${styleName}`),
 );
 const configPath = join(payload, "ui/config");
 const config = JSON.parse(readFileSync(configPath, "utf8"));
-config[scriptName] = config["DSMTerminal.js"];
-delete config["DSMTerminal.js"];
+config[scriptName] = config["DiskShell.js"];
+delete config["DiskShell.js"];
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
 mkdirSync(join(payload, "bin"), { recursive: true });
-execFileSync("go", ["build", "-trimpath", "-ldflags=-s -w -buildid=", "-o", join(payload, "bin/dsm-terminal-server"), "./native"], {
+execFileSync("go", ["build", "-trimpath", "-ldflags=-s -w -buildid=", "-o", join(payload, "bin/diskshell-server"), "./native"], {
   cwd: here,
   env: { ...process.env, CGO_ENABLED: "0", GOARCH: "amd64", GOOS: "linux" },
   stdio: "inherit",
 });
 
 for (const script of readdirSync(join(staging, "scripts"))) chmodSync(join(staging, "scripts", script), 0o755);
-chmodSync(join(payload, "bin/dsm-terminal-server"), 0o755);
+chmodSync(join(payload, "bin/diskshell-server"), 0o755);
 const images = join(payload, "ui/images");
 mkdirSync(images, { recursive: true });
 for (const size of [16, 24, 32, 48, 64, 72, 128, 256]) writeFileSync(join(images, `icon_${size}.png`), renderIcon(size));
@@ -156,5 +156,5 @@ const info = readFileSync(join(here, "INFO.template"), "utf8")
 writeFileSync(join(staging, "INFO"), info);
 archive(output, staging, ["INFO", "package.tgz", "scripts", "conf", "LICENSE", "PACKAGE_ICON.PNG", "PACKAGE_ICON_256.PNG"]);
 
-if (!existsSync(output)) throw new Error("DSM Terminal SPK build did not produce an output file.");
+if (!existsSync(output)) throw new Error("DiskShell SPK build did not produce an output file.");
 process.stdout.write(`${relative(here, output)}\n`);

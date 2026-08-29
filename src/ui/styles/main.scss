@@ -1,6 +1,6 @@
 @use "tokens" as *;
 
-.dsm-terminal-shell {
+.diskshell-shell {
   box-sizing: border-box;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -9,13 +9,13 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  container: dsm-terminal / inline-size;
+  container: diskshell / inline-size;
   color: $text;
   background: $background;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.dsm-terminal-toolbar {
+.diskshell-toolbar {
   grid-row: 1;
   display: flex;
   align-items: center;
@@ -35,7 +35,7 @@
   span { color: $muted; font-size: 12px; }
 }
 
-.dsm-terminal-actions {
+.diskshell-actions {
   display: flex;
   gap: 8px;
 
@@ -55,7 +55,7 @@
   }
 }
 
-.dsm-terminal-alert {
+.diskshell-alert {
   grid-row: 2;
   padding: 9px 14px;
   border-bottom: 1px solid rgba($danger, .45);
@@ -64,7 +64,7 @@
   font-size: 12px;
 }
 
-.dsm-terminal-canvas {
+.diskshell-canvas {
   grid-row: 3;
   min-width: 0;
   min-height: 0;
@@ -76,7 +76,7 @@
   .xterm-viewport { scrollbar-color: $border $background; }
 }
 
-.dsm-terminal-status {
+.diskshell-status {
   grid-row: 4;
   display: flex;
   align-items: center;
@@ -89,7 +89,7 @@
   font-size: 11px;
 }
 
-.dsm-terminal-status-dot {
+.diskshell-status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -100,24 +100,24 @@
   &.error { background: $danger; }
 }
 
-.dsm-terminal-status-hint {
+.diskshell-status-hint {
   margin-left: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@container dsm-terminal (max-width: 720px) {
-  .dsm-terminal-toolbar {
+@container diskshell (max-width: 720px) {
+  .diskshell-toolbar {
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  .dsm-terminal-toolbar > div:first-child span { display: none; }
-  .dsm-terminal-status-hint { display: none; }
+  .diskshell-toolbar > div:first-child span { display: none; }
+  .diskshell-status-hint { display: none; }
 }
 
-@container dsm-terminal (max-width: 520px) {
-  .dsm-terminal-toolbar { flex-direction: column; }
-  .dsm-terminal-actions { width: 100%; }
-  .dsm-terminal-actions button { flex: 1 1 0; padding-inline: 8px; }
+@container diskshell (max-width: 520px) {
+  .diskshell-toolbar { flex-direction: column; }
+  .diskshell-actions { width: 100%; }
+  .diskshell-actions button { flex: 1 1 0; padding-inline: 8px; }
 }

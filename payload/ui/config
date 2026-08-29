@@ -1,9 +1,9 @@
 {
-  "DSMTerminal.js": {
-    "SYNO.SDS.App.DSMTerminal.Instance": {
+  "DiskShell.js": {
+    "SYNO.SDS.App.DiskShell.Instance": {
       "type": "app",
-      "title": "Terminal",
-      "appWindow": "SYNO.SDS.App.DSMTerminal.Instance",
+      "title": "DiskShell",
+      "appWindow": "SYNO.SDS.App.DiskShell.Instance",
       "allUsers": false,
       "allowMultiInstance": false,
       "hidden": false,
