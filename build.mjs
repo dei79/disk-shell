@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const metadata = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
-const packageRevision = process.env.DSM_TERMINAL_PACKAGE_REVISION || "12";
+const packageRevision = process.env.DSM_TERMINAL_PACKAGE_REVISION || "13";
 const spkVersion = `${metadata.version}-${packageRevision}`;
 const buildRoot = join(here, "build");
 const staging = join(buildRoot, "staging");

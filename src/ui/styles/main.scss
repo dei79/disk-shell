@@ -16,6 +16,7 @@
 }
 
 .dsm-terminal-toolbar {
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -55,6 +56,7 @@
 }
 
 .dsm-terminal-alert {
+  grid-row: 2;
   padding: 9px 14px;
   border-bottom: 1px solid rgba($danger, .45);
   color: #ffd4d4;
@@ -63,6 +65,7 @@
 }
 
 .dsm-terminal-canvas {
+  grid-row: 3;
   min-width: 0;
   min-height: 0;
   padding: 10px 12px;
@@ -74,6 +77,7 @@
 }
 
 .dsm-terminal-status {
+  grid-row: 4;
   display: flex;
   align-items: center;
   gap: 8px;

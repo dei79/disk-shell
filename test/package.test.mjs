@@ -74,3 +74,11 @@ test("fits the terminal from container-driven DSM window resizes", () => {
   assert.match(styles, /@container dsm-terminal \(max-width: 520px\)/u);
   assert.doesNotMatch(styles, /min-height:\s*420px/u);
 });
+
+test("keeps the status bar compact when the optional alert is absent", () => {
+  const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
+  assert.match(styles, /\.dsm-terminal-toolbar\s*\{[^}]*grid-row:\s*1/u);
+  assert.match(styles, /\.dsm-terminal-alert\s*\{[^}]*grid-row:\s*2/u);
+  assert.match(styles, /\.dsm-terminal-canvas\s*\{[^}]*grid-row:\s*3/u);
+  assert.match(styles, /\.dsm-terminal-status\s*\{[^}]*grid-row:\s*4/u);
+});
