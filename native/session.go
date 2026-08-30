@@ -33,6 +33,7 @@ type sessionInfo struct {
 
 type sessionAttachment struct {
 	output chan []byte
+	info   chan sessionInfo
 	done   chan struct{}
 	once   sync.Once
 }
@@ -223,6 +224,14 @@ func (manager *sessionManager) terminate(owner, identifier string) bool {
 	return true
 }
 
+func (manager *sessionManager) rename(owner, identifier, name string) (sessionInfo, bool) {
+	session := manager.find(owner, identifier)
+	if session == nil {
+		return sessionInfo{}, false
+	}
+	return session.rename(name)
+}
+
 func (manager *sessionManager) shutdown() {
 	manager.mu.Lock()
 	sessions := make([]*shellSession, 0, len(manager.sessions))
@@ -248,7 +257,7 @@ func (manager *sessionManager) shutdown() {
 }
 
 func (session *shellSession) attach() (*sessionAttachment, []byte) {
-	attachment := &sessionAttachment{output: make(chan []byte, 64), done: make(chan struct{})}
+	attachment := &sessionAttachment{output: make(chan []byte, 64), info: make(chan sessionInfo, 1), done: make(chan struct{})}
 	session.mu.Lock()
 	previous := session.attachment
 	session.attachment = attachment
@@ -287,6 +296,10 @@ func (session *shellSession) detach(attachment *sessionAttachment) {
 func (session *shellSession) info() sessionInfo {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	return session.infoLocked()
+}
+
+func (session *shellSession) infoLocked() sessionInfo {
 	state := "exited"
 	if session.running {
 		state = "running"
@@ -304,8 +317,11 @@ func (session *shellSession) info() sessionInfo {
 func (session *shellSession) setPersistent(value bool) sessionInfo {
 	session.mu.Lock()
 	session.persistent = value
+	info := session.infoLocked()
+	attachment := session.attachment
 	session.mu.Unlock()
-	return session.info()
+	session.notify(attachment, info)
+	return info
 }
 
 func (session *shellSession) rename(name string) (sessionInfo, bool) {
@@ -314,8 +330,30 @@ func (session *shellSession) rename(name string) (sessionInfo, bool) {
 	}
 	session.mu.Lock()
 	session.name = strings.TrimSpace(name)
+	info := session.infoLocked()
+	attachment := session.attachment
 	session.mu.Unlock()
-	return session.info(), true
+	session.notify(attachment, info)
+	return info, true
+}
+
+func (session *shellSession) notify(attachment *sessionAttachment, info sessionInfo) {
+	if attachment == nil {
+		return
+	}
+	select {
+	case attachment.info <- info:
+		return
+	default:
+	}
+	select {
+	case <-attachment.info:
+	default:
+	}
+	select {
+	case attachment.info <- info:
+	case <-attachment.done:
+	}
 }
 
 func (session *shellSession) write(data []byte) {

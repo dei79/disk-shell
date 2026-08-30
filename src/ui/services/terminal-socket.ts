@@ -83,6 +83,18 @@ export async function terminateBackgroundSession(sessionId: string): Promise<voi
   if (!response.ok) throw new Error(messages.serviceError);
 }
 
+export async function renameBackgroundSession(sessionId: string, name: string): Promise<SessionInfo> {
+  const response = await sessionFetch(`/diskshell/sessions?id=${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) throw new Error(messages.renameFailed);
+  const message = await response.json() as ServerMessage;
+  if (message.type !== "session" || !message.session) throw new Error(messages.invalidResponse);
+  return message.session;
+}
+
 function sessionFetch(path: string, init: RequestInit): Promise<Response> {
   const token = currentSynoToken();
   const headers = new Headers(init.headers);

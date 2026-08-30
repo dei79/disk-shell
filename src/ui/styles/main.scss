@@ -128,6 +128,7 @@
 }
 
 .diskshell-tab-close,
+.diskshell-tab-rename,
 .diskshell-new-tab {
   flex: 0 0 30px;
   border: 0;
@@ -138,6 +139,22 @@
   &:hover:not(:disabled) { color: $text; background: $panel-raised; }
   &:focus-visible { outline: 2px solid $accent-hover; outline-offset: -2px; }
   &:disabled { opacity: .35; cursor: default; }
+}
+
+.diskshell-tab-rename { flex-basis: 26px; }
+
+.diskshell-rename-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 6px;
+  border: 1px solid $accent-hover;
+  border-radius: 4px;
+  outline: 0;
+  color: $text;
+  background: $background;
+  font: inherit;
 }
 
 .diskshell-new-tab { flex-basis: 36px; font-size: 18px; }
@@ -201,7 +218,7 @@
 
 .diskshell-session-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 7px;
   padding: 8px;

@@ -239,6 +239,31 @@ func TestSessionNamesAreValidated(t *testing.T) {
 	}
 }
 
+func TestSessionRenameIsOwnerScopedAndNotifiesAttachment(t *testing.T) {
+	manager := newSessionManager()
+	attachment := &sessionAttachment{info: make(chan sessionInfo, 1), done: make(chan struct{})}
+	session := &shellSession{
+		manager: manager, id: "owned", owner: "alice", name: "Shell", persistent: true, running: true,
+		attachment: attachment, lastActivity: time.Now(),
+	}
+	manager.sessions[session.id] = session
+	if _, ok := manager.rename("bob", session.id, "Foreign"); ok {
+		t.Fatal("another owner renamed the session")
+	}
+	info, ok := manager.rename("alice", session.id, "Backup")
+	if !ok || info.Name != "Backup" {
+		t.Fatalf("owned session was not renamed: %#v", info)
+	}
+	select {
+	case update := <-attachment.info:
+		if update.Name != "Backup" {
+			t.Fatalf("unexpected rename update: %#v", update)
+		}
+	default:
+		t.Fatal("attached client was not notified of rename")
+	}
+}
+
 func TestSessionListingIsPersistentAndOwnerScoped(t *testing.T) {
 	manager := newSessionManager()
 	manager.sessions["owned"] = &shellSession{

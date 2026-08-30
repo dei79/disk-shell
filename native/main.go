@@ -185,7 +185,6 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 	}
 	pingFinished := make(chan struct{})
 	defer close(pingFinished)
-	updates := make(chan serverMessage, 8)
 	outputFinished := make(chan struct{})
 	go func() {
 		defer close(outputFinished)
@@ -197,9 +196,9 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 				if writeError := connection.WriteJSON(serverMessage{Type: "output", Data: string(data)}); writeError != nil {
 					return
 				}
-			case message := <-updates:
+			case info := <-attachment.info:
 				_ = connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := connection.WriteJSON(message); err != nil {
+				if err := connection.WriteJSON(serverMessage{Type: "session", Session: &info}); err != nil {
 					return
 				}
 			case <-attachment.done:
@@ -228,12 +227,9 @@ terminalLoop:
 		case "resize":
 			session.resize(message.Cols, message.Rows)
 		case "persist":
-			info := session.setPersistent(message.Persistent)
-			updates <- serverMessage{Type: "session", Session: &info}
+			session.setPersistent(message.Persistent)
 		case "rename":
-			if info, ok := session.rename(message.Name); ok {
-				updates <- serverMessage{Type: "session", Session: &info}
-			}
+			session.rename(message.Name)
 		case "terminate":
 			session.terminate()
 			break terminalLoop
@@ -248,7 +244,7 @@ terminalLoop:
 }
 
 func sessionIndex(response http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet && request.Method != http.MethodDelete {
+	if request.Method != http.MethodGet && request.Method != http.MethodDelete && request.Method != http.MethodPatch {
 		http.Error(response, "Method not allowed.", http.StatusMethodNotAllowed)
 		return
 	}
@@ -262,6 +258,21 @@ func sessionIndex(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if request.Method == http.MethodPatch {
+		request.Body = http.MaxBytesReader(response, request.Body, 4096)
+		var message clientMessage
+		if err := json.NewDecoder(request.Body).Decode(&message); err != nil {
+			http.Error(response, "Invalid session name.", http.StatusBadRequest)
+			return
+		}
+		info, ok := sessionStore.rename(account.username, request.URL.Query().Get("id"), message.Name)
+		if !ok {
+			http.Error(response, "Session not found or invalid name.", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(response).Encode(serverMessage{Type: "session", Session: &info})
+		return
+	}
 	if request.Method == http.MethodDelete {
 		if !sessionStore.terminate(account.username, request.URL.Query().Get("id")) {
 			http.Error(response, "Session not found.", http.StatusNotFound)

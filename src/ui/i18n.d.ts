@@ -9,6 +9,9 @@ export type Messages = {
   closeTab: string;
   tabsAriaLabel: string;
   tabTitle: string;
+  renameSession: string;
+  invalidSessionName: string;
+  renameFailed: string;
   sessions: string;
   backgroundSessions: string;
   keepAlive: string;

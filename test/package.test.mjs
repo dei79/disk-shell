@@ -153,3 +153,13 @@ test("separates persistent shell sessions from websocket lifetimes", () => {
   assert.match(socket, /listBackgroundSessions/u);
   assert.match(socket, /type: "open"/u);
 });
+
+test("renames open and background shell sessions", () => {
+  const backend = readFileSync(join(integration, "native", "main.go"), "utf8");
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
+  assert.match(backend, /http\.MethodPatch/u);
+  assert.match(view, /beginTabRename/u);
+  assert.match(view, /beginSessionRename/u);
+  assert.match(socket, /renameBackgroundSession/u);
+});

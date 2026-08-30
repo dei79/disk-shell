@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 
 import {
   listBackgroundSessions,
+  renameBackgroundSession,
   TerminalSocket,
   terminateBackgroundSession,
 } from "../services/terminal-socket.js";
@@ -37,6 +38,9 @@ type TerminalView = {
   pendingCloseTab: ShellTab | null;
   notice: string;
   noticeTimer: number | null;
+  renamingTabId: number | null;
+  renamingSessionId: string;
+  renameValue: string;
   resizeObserver: ResizeObserver | null;
   fitFrame: number | null;
   $refs: { terminalHost: HTMLElement; terminalCanvases: HTMLElement | HTMLElement[] };
@@ -51,6 +55,10 @@ type TerminalView = {
   removeTab(tab: ShellTab): void;
   refreshSessions(): Promise<void>;
   showNotice(message: string): void;
+  beginTabRename(tab: ShellTab): void;
+  beginSessionRename(session: SessionInfo): void;
+  commitRename(): Promise<void>;
+  cancelRename(): void;
   connect(): void;
   fit(): void;
   scheduleFit(): void;
@@ -71,11 +79,13 @@ export const terminalViewComponent = {
     '  </header>',
     '  <nav class="diskshell-tabs" role="tablist" :aria-label="text.tabsAriaLabel">',
     '    <div v-for="tab in tabs" :key="tab.id" role="presentation" class="diskshell-tab" :class="{ active: tab.id === activeTabId, persistent: tab.persistent }">',
-    '      <button type="button" role="tab" :aria-selected="tab.id === activeTabId" :tabindex="tab.id === activeTabId ? 0 : -1" @click="switchTab(tab.id)">',
+    '      <button v-if="renamingTabId !== tab.id" type="button" role="tab" :aria-selected="tab.id === activeTabId" :tabindex="tab.id === activeTabId ? 0 : -1" @click="switchTab(tab.id)" @dblclick="beginTabRename(tab)">',
     '        <span class="diskshell-tab-status" :class="tab.connectionState" aria-hidden="true"></span>',
     '        <span class="diskshell-tab-pin" v-if="tab.persistent" :title="text.keepAliveEnabled" aria-hidden="true">◆</span>',
     '        <span>{{ tab.title }}</span>',
     '      </button>',
+    '      <input v-else class="diskshell-rename-input" v-model="renameValue" :aria-label="text.renameSession" maxlength="64" @keydown.enter.prevent="commitRename" @keydown.esc.prevent="cancelRename" @blur="commitRename">',
+    '      <button type="button" class="diskshell-tab-rename" :aria-label="text.renameSession + \': \' + tab.title" :title="text.renameSession" @click.stop="beginTabRename(tab)">✎</button>',
     `      <button type="button" class="diskshell-tab-close" :aria-label="text.closeTab + ': ' + tab.title" @click.stop="requestCloseTab(tab)">×</button>`,
     '    </div>',
     '    <button type="button" class="diskshell-new-tab" :aria-label="text.newTab" :title="text.newTab" :disabled="tabs.length >= 4" @click="addTab()">+</button>',
@@ -83,7 +93,8 @@ export const terminalViewComponent = {
     '  <aside v-if="sessionsOpen" class="diskshell-session-panel" :aria-label="text.sessions">',
     '    <header><strong>{{ text.backgroundSessions }}</strong><button type="button" @click="sessionsOpen = false">×</button></header>',
     '    <div v-for="session in backgroundSessions" :key="session.id" class="diskshell-session-item">',
-    '      <div><strong>{{ session.name }}</strong><span>{{ session.attached ? text.activeElsewhere : (session.state === \'running\' ? text.running : text.exited) }}</span></div>',
+    '      <div><strong v-if="renamingSessionId !== session.id">{{ session.name }}</strong><input v-else class="diskshell-rename-input" v-model="renameValue" :aria-label="text.renameSession" maxlength="64" @keydown.enter.prevent="commitRename" @keydown.esc.prevent="cancelRename" @blur="commitRename"><span>{{ session.attached ? text.activeElsewhere : (session.state === \'running\' ? text.running : text.exited) }}</span></div>',
+    '      <button type="button" :aria-label="text.renameSession + \': \' + session.name" :title="text.renameSession" @click="beginSessionRename(session)">✎</button>',
     '      <button type="button" @click="openBackgroundSession(session)">{{ session.attached ? text.takeOver : text.openSession }}</button>',
     '      <button type="button" class="danger" @click="endBackgroundSession(session)">{{ text.endSession }}</button>',
     '    </div>',
@@ -119,6 +130,9 @@ export const terminalViewComponent = {
       pendingCloseTab: null as ShellTab | null,
       notice: "",
       noticeTimer: null as number | null,
+      renamingTabId: null as number | null,
+      renamingSessionId: "",
+      renameValue: "",
       resizeObserver: null as ResizeObserver | null,
       fitFrame: null as number | null,
     };
@@ -353,6 +367,51 @@ export const terminalViewComponent = {
         this.notice = "";
         this.noticeTimer = null;
       }, 3500);
+    },
+    beginTabRename(this: TerminalView, tab: ShellTab): void {
+      this.renamingSessionId = "";
+      this.renamingTabId = tab.id;
+      this.renameValue = tab.title;
+      this.$nextTick(() => document.querySelector<HTMLInputElement>(".diskshell-rename-input")?.select());
+    },
+    beginSessionRename(this: TerminalView, session: SessionInfo): void {
+      this.renamingTabId = null;
+      this.renamingSessionId = session.id;
+      this.renameValue = session.name;
+      this.$nextTick(() => document.querySelector<HTMLInputElement>(".diskshell-session-panel .diskshell-rename-input")?.select());
+    },
+    async commitRename(this: TerminalView): Promise<void> {
+      const tabId = this.renamingTabId;
+      const sessionId = this.renamingSessionId;
+      const name = this.renameValue.trim();
+      this.cancelRename();
+      if (!name || name.length > 64) {
+        this.showNotice(this.text.invalidSessionName);
+        return;
+      }
+      if (tabId !== null) {
+        const tab = this.tabs.find((candidate) => candidate.id === tabId);
+        if (!tab || tab.title === name) return;
+        tab.title = name;
+        tab.terminalSocket?.send({ type: "rename", name });
+        void this.refreshSessions();
+        return;
+      }
+      if (!sessionId) return;
+      try {
+        const renamed = await renameBackgroundSession(sessionId, name);
+        const session = this.backgroundSessions.find((candidate) => candidate.id === sessionId);
+        if (session) session.name = renamed.name;
+        const tab = this.tabs.find((candidate) => candidate.sessionId === sessionId);
+        if (tab) tab.title = renamed.name;
+      } catch {
+        this.showNotice(this.text.renameFailed);
+      }
+    },
+    cancelRename(this: TerminalView): void {
+      this.renamingTabId = null;
+      this.renamingSessionId = "";
+      this.renameValue = "";
     },
     allowClipboard(this: TerminalView): void {
       this.clipboardEnabled = true;
