@@ -6,9 +6,18 @@ declare const Vue: any;
 (function registerDiskShellApplication() {
   "use strict";
 
+  // DSM keeps third-party app stylesheets in the desktop document when an SPK
+  // is upgraded without a full page reload. Remove older revisioned DiskShell
+  // styles before loading the current one so obsolete tooltip rules cannot run
+  // alongside the new UI.
+  for (const stylesheet of document.querySelectorAll<HTMLLinkElement>(
+    'link[data-diskshell-stylesheet], link[href*="webman/3rdparty/DiskShell/DiskShell-"]',
+  )) stylesheet.remove();
+
   const css = document.createElement("link");
   css.rel = "stylesheet";
   css.href = "webman/3rdparty/DiskShell/style.css";
+  css.dataset.diskshellStylesheet = "true";
   document.head.appendChild(css);
 
   SYNO.namespace("SYNO.SDS.App.DiskShell");

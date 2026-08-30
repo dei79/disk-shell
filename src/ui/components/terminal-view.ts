@@ -56,8 +56,19 @@ type TerminalView = {
   dragActive: boolean;
   uploading: boolean;
   uploadProgress: number;
+  toolbarTooltip: string;
+  toolbarTooltipLeft: number;
+  toolbarTooltipTop: number;
   fitFrame: number | null;
-  $refs: { terminalHost: HTMLElement; terminalCanvases: HTMLElement | HTMLElement[] };
+  searchShortcutHandler: ((event: KeyboardEvent) => void) | null;
+  $refs: {
+    shell: HTMLElement;
+    actions: HTMLElement;
+    searchInput?: HTMLInputElement;
+    toolbarTooltip?: HTMLElement;
+    terminalHost: HTMLElement;
+    terminalCanvases: HTMLElement | HTMLElement[];
+  };
   $nextTick(callback: () => void): void;
   activeTab: ShellTab | null;
   restoreSessions(): Promise<void>;
@@ -69,11 +80,15 @@ type TerminalView = {
   removeTab(tab: ShellTab): void;
   refreshSessions(): Promise<void>;
   showNotice(message: string): void;
+  showToolbarTooltip(event: Event): void;
+  hideToolbarTooltip(): void;
+  positionToolbarTooltip(button: HTMLButtonElement): void;
   beginTabRename(tab: ShellTab): void;
   beginSessionRename(session: SessionInfo): void;
   commitRename(): Promise<void>;
   cancelRename(): void;
   openSearch(): void;
+  handleSearchShortcut(event: KeyboardEvent): boolean;
   closeSearch(): void;
   searchNext(): void;
   searchPrevious(): void;
@@ -93,21 +108,28 @@ type TerminalView = {
 export const terminalViewComponent = {
   components: { "terminal-status-bar": statusBarComponent },
   template: [
-    '<section class="diskshell-shell">',
+    '<section ref="shell" class="diskshell-shell">',
     '  <header class="diskshell-toolbar">',
     '    <div><strong>DiskShell</strong><span>{{ text.subtitle }}</span></div>',
-    '    <div class="diskshell-actions">',
-    '      <button type="button" class="sessions" v-if="backgroundSessions.length" @click="sessionsOpen = !sessionsOpen">{{ text.sessions }} · {{ backgroundSessions.length }}</button>',
-    '      <button type="button" v-if="activeTab" @click="openSearch">{{ text.search }}</button>',
-    '      <button type="button" v-if="splitMode === \'none\'" :disabled="tabs.length < 2" @click="enableSplit(\'vertical\')">{{ text.splitVertical }}</button>',
-    '      <button type="button" v-if="splitMode === \'none\'" :disabled="tabs.length < 2" @click="enableSplit(\'horizontal\')">{{ text.splitHorizontal }}</button>',
-    '      <button type="button" v-if="splitMode !== \'none\'" @click="enableSplit(splitMode === \'vertical\' ? \'horizontal\' : \'vertical\')">{{ text.changeSplit }}</button>',
-    '      <button type="button" v-if="splitMode !== \'none\'" @click="closeSplit">{{ text.closeSplit }}</button>',
-    '      <button type="button" v-if="activeTab && connected" @click="togglePersistent">{{ activeTab.persistent ? text.keepAliveEnabled : text.keepAlive }}</button>',
-    '      <button type="button" @click="allowClipboard" :disabled="clipboardEnabled">{{ clipboardEnabled ? text.clipboardAllowed : text.allowClipboard }}</button>',
-    '      <button type="button" class="primary" @click="connect" v-if="activeTab && !connected && activeTab.processState !== \'exited\'">{{ text.reconnect }}</button>',
+    '    <div ref="actions" class="diskshell-actions" role="toolbar" :aria-label="text.toolbarLabel" @mouseover="showToolbarTooltip" @focusin="showToolbarTooltip" @mouseleave="hideToolbarTooltip" @focusout="hideToolbarTooltip">',
+    '      <div class="diskshell-action-group">',
+    '        <button type="button" class="sessions" v-if="backgroundSessions.length" :aria-label="text.sessions" :data-tooltip="text.sessionsTooltip" @click="sessionsOpen = !sessionsOpen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01"/></svg><span class="diskshell-action-badge">{{ backgroundSessions.length }}</span></button>',
+    '        <button type="button" v-if="activeTab" :aria-label="text.search" :data-tooltip="text.searchTooltip" @click="openSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg></button>',
+    '      </div>',
+    '      <div class="diskshell-action-group">',
+    '        <button type="button" v-if="splitMode === \'none\'" :aria-disabled="tabs.length < 2" :aria-label="text.splitVertical" :data-tooltip="tabs.length < 2 ? text.splitNeedsTabsTooltip : text.splitVerticalTooltip" @click="enableSplit(\'vertical\')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></button>',
+    '        <button type="button" v-if="splitMode === \'none\'" :aria-disabled="tabs.length < 2" :aria-label="text.splitHorizontal" :data-tooltip="tabs.length < 2 ? text.splitNeedsTabsTooltip : text.splitHorizontalTooltip" @click="enableSplit(\'horizontal\')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></svg></button>',
+    '        <button type="button" v-if="splitMode !== \'none\'" :aria-label="text.changeSplit" :data-tooltip="text.changeSplitTooltip" @click="enableSplit(splitMode === \'vertical\' ? \'horizontal\' : \'vertical\')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h11M12 5l3 3-3 3M20 16H9M12 13l-3 3 3 3"/></svg></button>',
+    '        <button type="button" v-if="splitMode !== \'none\'" :aria-label="text.closeSplit" :data-tooltip="text.closeSplitTooltip" @click="closeSplit"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m9 9 6 6M15 9l-6 6"/></svg></button>',
+    '      </div>',
+    '      <div class="diskshell-action-group">',
+    '        <button type="button" v-if="activeTab && connected" :class="{ active: activeTab.persistent }" :aria-label="text.keepAlive" :aria-pressed="activeTab.persistent" :data-tooltip="activeTab.persistent ? text.keepAliveEnabledTooltip : text.keepAliveTooltip" @click="togglePersistent"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 8A7.5 7.5 0 1 1 5 15M5.5 8V4M5.5 8H9M12 8v4l3 2"/></svg></button>',
+    '        <button type="button" :class="{ active: clipboardEnabled }" :aria-label="clipboardEnabled ? text.clipboardAllowed : text.allowClipboard" :data-tooltip="clipboardEnabled ? text.clipboardAllowedTooltip : text.allowClipboardTooltip" @click="allowClipboard" :disabled="clipboardEnabled"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="13" height="16" rx="2"/><path d="M9 5V3h7v4H9zM3 17V4h3"/></svg></button>',
+    '        <button type="button" class="primary" :aria-label="text.reconnect" :data-tooltip="text.reconnectTooltip" @click="connect" v-if="activeTab && !connected && activeTab.processState !== \'exited\'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M18 12a6 6 0 0 0-10-4L4 12M6 12a6 6 0 0 0 10 4l4-4"/></svg></button>',
+    '      </div>',
     '    </div>',
     '  </header>',
+    '  <div v-if="toolbarTooltip" ref="toolbarTooltip" class="diskshell-toolbar-tooltip" role="tooltip" :style="{ left: toolbarTooltipLeft + \'px\', top: toolbarTooltipTop + \'px\' }">{{ toolbarTooltip }}</div>',
     '  <nav class="diskshell-tabs" role="tablist" :aria-label="text.tabsAriaLabel">',
     '    <div v-for="tab in tabs" :key="tab.id" role="presentation" class="diskshell-tab" :class="{ active: tab.id === activeTabId, persistent: tab.persistent }">',
     '      <button v-if="renamingTabId !== tab.id" type="button" role="tab" :aria-selected="tab.id === activeTabId" :tabindex="tab.id === activeTabId ? 0 : -1" @click="switchTab(tab.id)" @dblclick="beginTabRename(tab)">',
@@ -133,7 +155,7 @@ export const terminalViewComponent = {
     '  <div v-if="activeTab && activeTab.errorMessage" class="diskshell-alert" role="alert">{{ activeTab.errorMessage }}</div>',
     '  <div ref="terminalHost" class="diskshell-terminal-host" @dragenter.prevent="handleDragEnter" @dragover.prevent @dragleave.prevent="handleDragLeave" @drop.prevent="handleDrop">',
     '    <div v-if="searchOpen && activeTab" class="diskshell-search" role="search" @keydown.esc.prevent="closeSearch">',
-    '      <input class="diskshell-search-input" v-model="activeTab.searchQuery" :placeholder="text.searchPlaceholder" :aria-label="text.search" @input="searchNext" @keydown.enter.prevent="searchNext">',
+    '      <input ref="searchInput" class="diskshell-search-input" v-model="activeTab.searchQuery" :placeholder="text.searchPlaceholder" :aria-label="text.search" @input="searchNext" @keydown.enter.prevent="searchNext">',
     '      <span aria-live="polite">{{ activeTab.searchResultCount ? (activeTab.searchResultIndex + 1) + \' / \' + activeTab.searchResultCount : text.noResults }}</span>',
     '      <button type="button" :aria-label="text.previousResult" :title="text.previousResult" @click="searchPrevious">↑</button>',
     '      <button type="button" :aria-label="text.nextResult" :title="text.nextResult" @click="searchNext">↓</button>',
@@ -145,7 +167,9 @@ export const terminalViewComponent = {
     '      <span v-else>{{ text.uploadLimits }}</span>',
     '    </div>',
     '    <div class="diskshell-panes" :class="\'split-\' + splitMode">',
-    `      <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="isTabVisible(tab.id)" class="diskshell-canvas" :class="{ 'active-pane': tab.id === activeTabId }" :aria-label="text.terminalAriaLabel + ': ' + tab.title" @mousedown="activatePane(tab.id)"></div>`,
+    `      <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="isTabVisible(tab.id)" class="diskshell-canvas" :class="{ 'active-pane': tab.id === activeTabId, 'primary-pane': tab.id === primaryTabId, 'secondary-pane': splitMode !== 'none' && tab.id === secondaryTabId }" :aria-label="text.terminalAriaLabel + ': ' + tab.title" @mousedown="activatePane(tab.id)" @focusin="activatePane(tab.id)">`,
+    '        <div v-if="splitMode !== \'none\'" class="diskshell-pane-tab" :class="{ active: tab.id === activeTabId }"><span class="diskshell-tab-status" :class="tab.connectionState" aria-hidden="true"></span><strong>{{ tab.title }}</strong></div>',
+    '      </div>',
     '    </div>',
     '  </div>',
     '  <terminal-status-bar v-if="activeTab" :state="activeTab.connectionState" :text="text"></terminal-status-bar>',
@@ -188,6 +212,10 @@ export const terminalViewComponent = {
       dragActive: false,
       uploading: false,
       uploadProgress: 0,
+      toolbarTooltip: "",
+      toolbarTooltipLeft: -9999,
+      toolbarTooltipTop: -9999,
+      searchShortcutHandler: null as ((event: KeyboardEvent) => void) | null,
     };
   },
   computed: {
@@ -199,11 +227,14 @@ export const terminalViewComponent = {
     },
   },
   mounted(this: TerminalView): void {
+    this.searchShortcutHandler = (event) => { this.handleSearchShortcut(event); };
+    document.addEventListener("keydown", this.searchShortcutHandler, true);
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.$refs.terminalHost);
     void this.restoreSessions();
   },
   beforeDestroy(this: TerminalView): void {
+    if (this.searchShortcutHandler) document.removeEventListener("keydown", this.searchShortcutHandler, true);
     this.resizeObserver?.disconnect();
     if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
     if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
@@ -474,6 +505,33 @@ export const terminalViewComponent = {
         this.noticeTimer = null;
       }, 3500);
     },
+    showToolbarTooltip(this: TerminalView, event: Event): void {
+      const element = event.target instanceof Element ? event.target : null;
+      const button = element?.closest<HTMLButtonElement>("button[data-tooltip]");
+      if (!button || !this.$refs.actions.contains(button)) return;
+      const tooltip = button.dataset.tooltip || "";
+      if (!tooltip) return;
+      this.toolbarTooltip = tooltip;
+      this.toolbarTooltipLeft = -9999;
+      this.toolbarTooltipTop = -9999;
+      this.$nextTick(() => this.positionToolbarTooltip(button));
+    },
+    hideToolbarTooltip(this: TerminalView): void {
+      this.toolbarTooltip = "";
+    },
+    positionToolbarTooltip(this: TerminalView, button: HTMLButtonElement): void {
+      const tooltip = this.$refs.toolbarTooltip;
+      if (!tooltip || !button.isConnected) return;
+      const shellBounds = this.$refs.shell.getBoundingClientRect();
+      const buttonBounds = button.getBoundingClientRect();
+      const margin = 8;
+      const width = Math.min(tooltip.offsetWidth, shellBounds.width - margin * 2);
+      const centered = buttonBounds.left - shellBounds.left + buttonBounds.width / 2 - width / 2;
+      this.toolbarTooltipLeft = Math.max(margin, Math.min(centered, shellBounds.width - width - margin));
+      const below = buttonBounds.bottom - shellBounds.top + margin;
+      const above = buttonBounds.top - shellBounds.top - tooltip.offsetHeight - margin;
+      this.toolbarTooltipTop = below + tooltip.offsetHeight <= shellBounds.height - margin ? below : Math.max(margin, above);
+    },
     beginTabRename(this: TerminalView, tab: ShellTab): void {
       this.renamingSessionId = "";
       this.renamingTabId = tab.id;
@@ -521,7 +579,16 @@ export const terminalViewComponent = {
     },
     openSearch(this: TerminalView): void {
       this.searchOpen = true;
-      this.$nextTick(() => document.querySelector<HTMLInputElement>(".diskshell-search-input")?.select());
+      this.$nextTick(() => this.$refs.searchInput?.select());
+    },
+    handleSearchShortcut(this: TerminalView, event: KeyboardEvent): boolean {
+      if (event.type !== "keydown" || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f"
+        || (!event.metaKey && !event.ctrlKey)) return false;
+      if (!(event.target instanceof Node) || !this.$refs.shell.contains(event.target)) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      this.openSearch();
+      return true;
     },
     closeSearch(this: TerminalView): void {
       this.searchOpen = false;
@@ -566,8 +633,10 @@ export const terminalViewComponent = {
         return;
       }
       if (this.splitMode === "none") {
-        this.primaryTabId = this.activeTabId;
-        this.secondaryTabId = this.tabs.find((tab) => tab.id !== this.primaryTabId)?.id || 0;
+        const companion = this.tabs.find((tab) => tab.id !== this.activeTabId);
+        const orderedTabs = this.tabs.filter((tab) => tab.id === this.activeTabId || tab.id === companion?.id);
+        this.primaryTabId = orderedTabs[0]?.id || this.activeTabId;
+        this.secondaryTabId = orderedTabs[1]?.id || 0;
       }
       this.splitMode = mode;
       this.$nextTick(() => this.fitVisible());
@@ -581,6 +650,8 @@ export const terminalViewComponent = {
     activatePane(this: TerminalView, tabId: number): void {
       if (!this.isTabVisible(tabId)) return;
       this.activeTabId = tabId;
+      const tab = this.tabs.find((candidate) => candidate.id === tabId);
+      this.$nextTick(() => tab?.terminal?.focus());
     },
     isTabVisible(this: TerminalView, tabId: number): boolean {
       return tabId === this.primaryTabId || (this.splitMode !== "none" && tabId === this.secondaryTabId);
@@ -624,10 +695,7 @@ export const terminalViewComponent = {
       this.activeTab?.terminal?.focus();
     },
     handleClipboardShortcut(this: TerminalView, tab: ShellTab, event: KeyboardEvent): boolean {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "f") {
-        this.openSearch();
-        return false;
-      }
+      if (this.handleSearchShortcut(event)) return false;
       if (!this.clipboardEnabled || !navigator.clipboard || event.type !== "keydown") return true;
       const clipboardShortcut = event.metaKey || (event.ctrlKey && event.shiftKey);
       if (!clipboardShortcut) return true;

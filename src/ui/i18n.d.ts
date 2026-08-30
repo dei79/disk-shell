@@ -2,6 +2,8 @@ import type { ConnectionState } from "./types.js";
 
 export type Messages = {
   subtitle: string;
+  toolbarLabel: string;
+  sessionsTooltip: string;
   allowClipboard: string;
   clipboardAllowed: string;
   reconnect: string;
@@ -13,6 +15,7 @@ export type Messages = {
   invalidSessionName: string;
   renameFailed: string;
   search: string;
+  searchTooltip: string;
   searchPlaceholder: string;
   previousResult: string;
   nextResult: string;
@@ -24,14 +27,24 @@ export type Messages = {
   uploadComplete: string;
   uploadFailed: string;
   splitVertical: string;
+  splitVerticalTooltip: string;
   splitHorizontal: string;
+  splitHorizontalTooltip: string;
+  splitNeedsTabsTooltip: string;
   changeSplit: string;
+  changeSplitTooltip: string;
   closeSplit: string;
+  closeSplitTooltip: string;
   splitNeedsSpace: string;
   sessions: string;
   backgroundSessions: string;
   keepAlive: string;
+  keepAliveTooltip: string;
   keepAliveEnabled: string;
+  keepAliveEnabledTooltip: string;
+  allowClipboardTooltip: string;
+  clipboardAllowedTooltip: string;
+  reconnectTooltip: string;
   openSession: string;
   takeOver: string;
   activeElsewhere: string;

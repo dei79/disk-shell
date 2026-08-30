@@ -170,7 +170,10 @@ test("searches each terminal tab independently", () => {
   assert.match(view, /searchQuery: ""/u);
   assert.match(view, /findNext/u);
   assert.match(view, /findPrevious/u);
-  assert.match(view, /event\.shiftKey && event\.key\.toLowerCase\(\) === "f"/u);
+  assert.match(view, /document\.addEventListener\("keydown", this\.searchShortcutHandler, true\)/u);
+  assert.match(view, /\(!event\.metaKey && !event\.ctrlKey\)/u);
+  assert.match(view, /event\.preventDefault\(\)/u);
+  assert.match(view, /this\.\$refs\.searchInput\?\.select\(\)/u);
 });
 
 test("uploads dropped files through an authenticated bounded endpoint", () => {
@@ -195,7 +198,46 @@ test("shows two existing shell tabs in a responsive split view", () => {
   assert.match(view, /secondaryTabId/u);
   assert.match(view, /enableSplit/u);
   assert.match(view, /isTabVisible/u);
+  assert.match(view, /'primary-pane': tab\.id === primaryTabId/u);
+  assert.match(view, /'secondary-pane': splitMode !== 'none' && tab\.id === secondaryTabId/u);
+  assert.match(view, /diskshell-pane-tab/u);
+  assert.match(view, /const orderedTabs = this\.tabs\.filter/u);
+  assert.match(view, /this\.primaryTabId = orderedTabs\[0\]\?\.id/u);
+  assert.match(view, /this\.secondaryTabId = orderedTabs\[1\]\?\.id/u);
+  assert.match(view, /this\.\$nextTick\(\(\) => tab\?\.terminal\?\.focus\(\)\)/u);
   assert.match(view, /clientWidth < 620/u);
   assert.match(styles, /split-vertical/u);
   assert.match(styles, /split-horizontal/u);
+  assert.match(styles, /\.split-vertical \.primary-pane \{ grid-area: 1 \/ 1; \}/u);
+  assert.match(styles, /\.split-vertical \.secondary-pane \{ grid-area: 1 \/ 2;/u);
+});
+
+test("renders shell actions as an accessible icon toolbar", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
+  assert.match(view, /role="toolbar"/u);
+  assert.match(view, /diskshell-action-group/u);
+  assert.match(view, /<svg viewBox=/u);
+  assert.match(view, /:aria-label="text\.search"/u);
+  assert.match(view, /:data-tooltip="text\.searchTooltip"/u);
+  assert.match(view, /text\.keepAliveEnabledTooltip : text\.keepAliveTooltip/u);
+  assert.match(view, /:aria-pressed="activeTab\.persistent"/u);
+  assert.match(view, /M5\.5 8A7\.5 7\.5 0 1 1 5 15/u);
+  assert.match(view, /:aria-disabled="tabs\.length < 2"/u);
+  assert.match(view, /text\.splitNeedsTabsTooltip/u);
+  assert.match(styles, /\.diskshell-action-group/u);
+  assert.match(styles, /\.diskshell-action-badge/u);
+  assert.match(view, /@focusin="showToolbarTooltip"/u);
+  assert.match(view, /class="diskshell-toolbar-tooltip"/u);
+  assert.match(view, /Math\.max\(margin, Math\.min\(centered/u);
+  assert.match(view, /below \+ tooltip\.offsetHeight <= shellBounds\.height/u);
+  assert.match(styles, /\.diskshell-toolbar-tooltip/u);
+});
+
+test("removes stale DiskShell stylesheets after an in-place DSM upgrade", () => {
+  const app = readFileSync(join(integration, "src/ui/app.ts"), "utf8");
+  assert.match(app, /link\[data-diskshell-stylesheet\]/u);
+  assert.match(app, /webman\/3rdparty\/DiskShell\/DiskShell-/u);
+  assert.match(app, /stylesheet\.remove\(\)/u);
+  assert.match(app, /css\.dataset\.diskshellStylesheet = "true"/u);
 });
