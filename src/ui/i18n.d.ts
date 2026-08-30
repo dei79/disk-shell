@@ -18,6 +18,11 @@ export type Messages = {
   nextResult: string;
   noResults: string;
   closeSearch: string;
+  dropFiles: string;
+  uploading: string;
+  uploadLimits: string;
+  uploadComplete: string;
+  uploadFailed: string;
   sessions: string;
   backgroundSessions: string;
   keepAlive: string;

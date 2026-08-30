@@ -17,6 +17,12 @@ export type SessionInfo = {
   lastActivity: string;
 };
 
+export type UploadInfo = {
+  name: string;
+  path: string;
+  size: number;
+};
+
 export type ServerMessage =
   | { type: "output"; data: string }
   | { type: "session"; session: SessionInfo }

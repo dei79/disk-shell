@@ -7,6 +7,7 @@ import {
   renameBackgroundSession,
   TerminalSocket,
   terminateBackgroundSession,
+  uploadFiles,
 } from "../services/terminal-socket.js";
 import { messages } from "../i18n.js";
 import type { Messages } from "../i18n.js";
@@ -48,6 +49,10 @@ type TerminalView = {
   renamingSessionId: string;
   renameValue: string;
   resizeObserver: ResizeObserver | null;
+  dragDepth: number;
+  dragActive: boolean;
+  uploading: boolean;
+  uploadProgress: number;
   fitFrame: number | null;
   $refs: { terminalHost: HTMLElement; terminalCanvases: HTMLElement | HTMLElement[] };
   $nextTick(callback: () => void): void;
@@ -69,6 +74,9 @@ type TerminalView = {
   closeSearch(): void;
   searchNext(): void;
   searchPrevious(): void;
+  handleDragEnter(event: DragEvent): void;
+  handleDragLeave(): void;
+  handleDrop(event: DragEvent): Promise<void>;
   connect(): void;
   fit(): void;
   scheduleFit(): void;
@@ -111,13 +119,18 @@ export const terminalViewComponent = {
     '    </div>',
     '  </aside>',
     '  <div v-if="activeTab && activeTab.errorMessage" class="diskshell-alert" role="alert">{{ activeTab.errorMessage }}</div>',
-    '  <div ref="terminalHost" class="diskshell-terminal-host">',
+    '  <div ref="terminalHost" class="diskshell-terminal-host" @dragenter.prevent="handleDragEnter" @dragover.prevent @dragleave.prevent="handleDragLeave" @drop.prevent="handleDrop">',
     '    <div v-if="searchOpen && activeTab" class="diskshell-search" role="search" @keydown.esc.prevent="closeSearch">',
     '      <input class="diskshell-search-input" v-model="activeTab.searchQuery" :placeholder="text.searchPlaceholder" :aria-label="text.search" @input="searchNext" @keydown.enter.prevent="searchNext">',
     '      <span aria-live="polite">{{ activeTab.searchResultCount ? (activeTab.searchResultIndex + 1) + \' / \' + activeTab.searchResultCount : text.noResults }}</span>',
     '      <button type="button" :aria-label="text.previousResult" :title="text.previousResult" @click="searchPrevious">↑</button>',
     '      <button type="button" :aria-label="text.nextResult" :title="text.nextResult" @click="searchNext">↓</button>',
     '      <button type="button" :aria-label="text.closeSearch" :title="text.closeSearch" @click="closeSearch">×</button>',
+    '    </div>',
+    '    <div v-if="dragActive || uploading" class="diskshell-upload-overlay" role="status">',
+    '      <strong>{{ uploading ? text.uploading : text.dropFiles }}</strong>',
+    '      <span v-if="uploading">{{ uploadProgress }}%</span>',
+    '      <span v-else>{{ text.uploadLimits }}</span>',
     '    </div>',
     `    <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="tab.id === activeTabId" class="diskshell-canvas" :aria-label="text.terminalAriaLabel + ': ' + tab.title"></div>`,
     '  </div>',
@@ -154,6 +167,10 @@ export const terminalViewComponent = {
       renameValue: "",
       resizeObserver: null as ResizeObserver | null,
       fitFrame: null as number | null,
+      dragDepth: 0,
+      dragActive: false,
+      uploading: false,
+      uploadProgress: 0,
     };
   },
   computed: {
@@ -482,6 +499,40 @@ export const terminalViewComponent = {
         },
       });
     },
+    handleDragEnter(this: TerminalView, event: DragEvent): void {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      this.dragDepth += 1;
+      this.dragActive = true;
+    },
+    handleDragLeave(this: TerminalView): void {
+      this.dragDepth = Math.max(0, this.dragDepth - 1);
+      if (this.dragDepth === 0) this.dragActive = false;
+    },
+    async handleDrop(this: TerminalView, event: DragEvent): Promise<void> {
+      this.dragDepth = 0;
+      this.dragActive = false;
+      const tab = this.activeTab;
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (!tab || tab.connectionState !== "connected" || files.length === 0) return;
+      if (files.length > 10 || files.some((file) => file.size > 25 * 1024 * 1024)) {
+        this.showNotice(this.text.uploadLimits);
+        return;
+      }
+      this.uploading = true;
+      this.uploadProgress = 0;
+      try {
+        const uploads = await uploadFiles(files, (percent) => { this.uploadProgress = percent; });
+        const paths = uploads.map((upload) => shellQuote(upload.path)).join(" ");
+        tab.terminal?.paste(paths);
+        this.showNotice(this.text.uploadComplete.replace("{count}", String(uploads.length)));
+      } catch {
+        this.showNotice(this.text.uploadFailed);
+      } finally {
+        this.uploading = false;
+        this.uploadProgress = 0;
+        tab.terminal?.focus();
+      }
+    },
     allowClipboard(this: TerminalView): void {
       this.clipboardEnabled = true;
       this.activeTab?.terminal?.focus();
@@ -508,3 +559,7 @@ export const terminalViewComponent = {
     },
   },
 };
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}

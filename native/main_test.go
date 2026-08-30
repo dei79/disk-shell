@@ -296,6 +296,50 @@ func TestSessionReservationsAreLimitedPerOwner(t *testing.T) {
 	}
 }
 
+func TestSafeUploadNameRemovesPathsAndControls(t *testing.T) {
+	if name := safeUploadName("../bad\nname.txt"); name != "bad_name.txt" {
+		t.Fatalf("unexpected safe upload name %q", name)
+	}
+	if name := safeUploadName("...  "); name != "upload" {
+		t.Fatalf("empty upload name did not fall back: %q", name)
+	}
+}
+
+func TestSaveUploadUsesPrivateAccountDirectory(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Skipf("current account is unavailable: %v", err)
+	}
+	uid, err := parseID(account.Uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, err := parseID(account.Gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
+	t.Setenv("DISKSHELL_UPLOAD_ROOT", t.TempDir())
+	info, err := saveUpload(&identity{uid: uid, gid: gid}, "notes 1.txt", strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(info.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "hello" || info.Name != "notes 1.txt" || info.Size != 5 {
+		t.Fatalf("unexpected saved upload: %#v %q", info, contents)
+	}
+	fileInfo, err := os.Stat(info.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("upload permissions are %o", fileInfo.Mode().Perm())
+	}
+}
+
 func TestPersistentSessionCanDetachReplayReattachAndTerminate(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {

@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage, SessionInfo } from "../types.js";
+import type { ClientMessage, ServerMessage, SessionInfo, UploadInfo } from "../types.js";
 import { messages } from "../i18n.js";
 
 export interface TerminalSocketEvents {
@@ -93,6 +93,37 @@ export async function renameBackgroundSession(sessionId: string, name: string): 
   const message = await response.json() as ServerMessage;
   if (message.type !== "session" || !message.session) throw new Error(messages.invalidResponse);
   return message.session;
+}
+
+export function uploadFiles(files: File[], onProgress: (percent: number) => void): Promise<UploadInfo[]> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/diskshell/uploads");
+    request.withCredentials = true;
+    const token = currentSynoToken();
+    if (token) request.setRequestHeader("X-Syno-Token", token);
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    });
+    request.addEventListener("load", () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error(messages.uploadFailed));
+        return;
+      }
+      try {
+        const response = JSON.parse(request.responseText) as { uploads?: UploadInfo[] };
+        if (!Array.isArray(response.uploads)) throw new Error(messages.invalidResponse);
+        resolve(response.uploads);
+      } catch {
+        reject(new Error(messages.invalidResponse));
+      }
+    });
+    request.addEventListener("error", () => reject(new Error(messages.uploadFailed)));
+    request.addEventListener("abort", () => reject(new Error(messages.uploadFailed)));
+    const body = new FormData();
+    for (const file of files) body.append("files", file, file.name);
+    request.send(body);
+  });
 }
 
 function sessionFetch(path: string, init: RequestInit): Promise<Response> {

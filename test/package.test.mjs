@@ -172,3 +172,15 @@ test("searches each terminal tab independently", () => {
   assert.match(view, /findPrevious/u);
   assert.match(view, /event\.shiftKey && event\.key\.toLowerCase\(\) === "f"/u);
 });
+
+test("uploads dropped files through an authenticated bounded endpoint", () => {
+  const backend = readFileSync(join(integration, "native", "upload.go"), "utf8");
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
+  assert.match(backend, /maxUploadFileSize/u);
+  assert.match(backend, /authenticateWithSlot/u);
+  assert.match(backend, /os\.O_EXCL/u);
+  assert.match(view, /handleDrop/u);
+  assert.match(view, /shellQuote/u);
+  assert.match(socket, /X-Syno-Token/u);
+});

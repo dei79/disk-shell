@@ -205,6 +205,24 @@
   background: $background;
 }
 
+.diskshell-upload-overlay {
+  position: absolute;
+  z-index: 15;
+  inset: 14px;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  border: 2px dashed $accent-hover;
+  border-radius: 10px;
+  color: $text;
+  background: rgba($panel, .94);
+  text-align: center;
+  pointer-events: none;
+
+  strong { font-size: 16px; }
+  span { color: $muted; font-size: 12px; }
+}
+
 .diskshell-canvas {
   box-sizing: border-box;
   width: 100%;

@@ -82,6 +82,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/diskshell/health", health)
 	mux.HandleFunc("/diskshell/sessions", sessionIndex)
+	mux.HandleFunc("/diskshell/uploads", uploadIndex)
 	mux.HandleFunc("/diskshell/ws", terminal)
 	server := &http.Server{
 		Addr:              listenAddress,
@@ -495,4 +496,8 @@ func validDimensions(columns, rows uint16) bool {
 func debugMessage(value interface{}) string {
 	encoded, _ := json.Marshal(value)
 	return fmt.Sprintf("%s", encoded)
+}
+
+func jsonResponse(response http.ResponseWriter, value interface{}) error {
+	return json.NewEncoder(response).Encode(value)
 }
