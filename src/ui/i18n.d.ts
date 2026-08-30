@@ -23,6 +23,11 @@ export type Messages = {
   uploadLimits: string;
   uploadComplete: string;
   uploadFailed: string;
+  splitVertical: string;
+  splitHorizontal: string;
+  changeSplit: string;
+  closeSplit: string;
+  splitNeedsSpace: string;
   sessions: string;
   backgroundSessions: string;
   keepAlive: string;

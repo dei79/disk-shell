@@ -13,5 +13,6 @@ test("uses English by default and German only for DSM ger", () => {
   assert.equal(selectMessages("ger").renameSession, "Session umbenennen");
   assert.equal(selectMessages("ger").search, "Suchen");
   assert.match(selectMessages("ger").dropFiles, /Dateien/u);
+  assert.equal(selectMessages("ger").closeSplit, "Teilung schließen");
   assert.equal(selectMessages("GER").status.connected, "Verbunden");
 });

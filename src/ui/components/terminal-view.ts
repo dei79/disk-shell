@@ -37,6 +37,9 @@ type TerminalView = {
   text: Messages;
   tabs: ShellTab[];
   activeTabId: number;
+  primaryTabId: number;
+  secondaryTabId: number;
+  splitMode: "none" | "vertical" | "horizontal";
   nextTabId: number;
   clipboardEnabled: boolean;
   backgroundSessions: SessionInfo[];
@@ -74,11 +77,16 @@ type TerminalView = {
   closeSearch(): void;
   searchNext(): void;
   searchPrevious(): void;
+  enableSplit(mode: "vertical" | "horizontal"): void;
+  closeSplit(): void;
+  activatePane(tabId: number): void;
+  isTabVisible(tabId: number): boolean;
   handleDragEnter(event: DragEvent): void;
   handleDragLeave(): void;
   handleDrop(event: DragEvent): Promise<void>;
   connect(): void;
   fit(): void;
+  fitVisible(): void;
   scheduleFit(): void;
 };
 
@@ -91,6 +99,10 @@ export const terminalViewComponent = {
     '    <div class="diskshell-actions">',
     '      <button type="button" class="sessions" v-if="backgroundSessions.length" @click="sessionsOpen = !sessionsOpen">{{ text.sessions }} · {{ backgroundSessions.length }}</button>',
     '      <button type="button" v-if="activeTab" @click="openSearch">{{ text.search }}</button>',
+    '      <button type="button" v-if="splitMode === \'none\'" :disabled="tabs.length < 2" @click="enableSplit(\'vertical\')">{{ text.splitVertical }}</button>',
+    '      <button type="button" v-if="splitMode === \'none\'" :disabled="tabs.length < 2" @click="enableSplit(\'horizontal\')">{{ text.splitHorizontal }}</button>',
+    '      <button type="button" v-if="splitMode !== \'none\'" @click="enableSplit(splitMode === \'vertical\' ? \'horizontal\' : \'vertical\')">{{ text.changeSplit }}</button>',
+    '      <button type="button" v-if="splitMode !== \'none\'" @click="closeSplit">{{ text.closeSplit }}</button>',
     '      <button type="button" v-if="activeTab && connected" @click="togglePersistent">{{ activeTab.persistent ? text.keepAliveEnabled : text.keepAlive }}</button>',
     '      <button type="button" @click="allowClipboard" :disabled="clipboardEnabled">{{ clipboardEnabled ? text.clipboardAllowed : text.allowClipboard }}</button>',
     '      <button type="button" class="primary" @click="connect" v-if="activeTab && !connected && activeTab.processState !== \'exited\'">{{ text.reconnect }}</button>',
@@ -132,7 +144,9 @@ export const terminalViewComponent = {
     '      <span v-if="uploading">{{ uploadProgress }}%</span>',
     '      <span v-else>{{ text.uploadLimits }}</span>',
     '    </div>',
-    `    <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="tab.id === activeTabId" class="diskshell-canvas" :aria-label="text.terminalAriaLabel + ': ' + tab.title"></div>`,
+    '    <div class="diskshell-panes" :class="\'split-\' + splitMode">',
+    `      <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="isTabVisible(tab.id)" class="diskshell-canvas" :class="{ 'active-pane': tab.id === activeTabId }" :aria-label="text.terminalAriaLabel + ': ' + tab.title" @mousedown="activatePane(tab.id)"></div>`,
+    '    </div>',
     '  </div>',
     '  <terminal-status-bar v-if="activeTab" :state="activeTab.connectionState" :text="text"></terminal-status-bar>',
     '  <div v-if="notice" class="diskshell-notice" role="status">{{ notice }}</div>',
@@ -154,6 +168,9 @@ export const terminalViewComponent = {
       text: messages,
       tabs: [] as ShellTab[],
       activeTabId: 0,
+      primaryTabId: 0,
+      secondaryTabId: 0,
+      splitMode: "none" as "none" | "vertical" | "horizontal",
       nextTabId: 1,
       clipboardEnabled: false,
       backgroundSessions: [] as SessionInfo[],
@@ -221,6 +238,7 @@ export const terminalViewComponent = {
         return;
       }
       if (this.tabs.length >= maxTabs) return;
+      const replaceSecondary = this.splitMode !== "none" && this.activeTabId === this.secondaryTabId;
       const id = this.nextTabId++;
       this.tabs.push({
         id,
@@ -239,6 +257,9 @@ export const terminalViewComponent = {
         terminalSocket: null,
       });
       this.activeTabId = id;
+      if (this.splitMode === "none") this.primaryTabId = id;
+      else if (replaceSecondary) this.secondaryTabId = id;
+      else this.primaryTabId = id;
       this.sessionsOpen = false;
       this.$nextTick(() => this.initializeTab(id));
     },
@@ -282,9 +303,15 @@ export const terminalViewComponent = {
     },
     switchTab(this: TerminalView, tabId: number): void {
       if (!this.tabs.some((tab) => tab.id === tabId)) return;
+      if (this.splitMode === "none") {
+        this.primaryTabId = tabId;
+      } else if (tabId !== this.primaryTabId && tabId !== this.secondaryTabId) {
+        if (this.activeTabId === this.secondaryTabId) this.secondaryTabId = tabId;
+        else this.primaryTabId = tabId;
+      }
       this.activeTabId = tabId;
       this.$nextTick(() => {
-        this.fit();
+        this.fitVisible();
         this.activeTab?.terminal?.focus();
       });
     },
@@ -314,11 +341,30 @@ export const terminalViewComponent = {
       this.tabs.splice(index, 1);
       tab.terminalSocket?.disconnect();
       tab.terminal?.dispose();
-      if (this.activeTabId === tab.id) {
-        this.activeTabId = this.tabs[Math.min(index, this.tabs.length - 1)]?.id || 0;
+      if (this.tabs.length === 0) {
+        this.activeTabId = 0;
+        this.primaryTabId = 0;
+        this.secondaryTabId = 0;
+        this.splitMode = "none";
+        this.addTab();
+        return;
       }
-      if (this.tabs.length === 0) this.addTab();
-      else this.$nextTick(() => this.scheduleFit());
+      if (this.splitMode !== "none") {
+        if (tab.id === this.primaryTabId) this.primaryTabId = this.secondaryTabId;
+        if (tab.id === this.secondaryTabId) this.secondaryTabId = 0;
+        if (!this.tabs.some((candidate) => candidate.id === this.primaryTabId)) this.primaryTabId = this.tabs[0].id;
+        if (!this.tabs.some((candidate) => candidate.id === this.secondaryTabId) || this.secondaryTabId === this.primaryTabId) {
+          this.secondaryTabId = this.tabs.find((candidate) => candidate.id !== this.primaryTabId)?.id || 0;
+        }
+        if (!this.secondaryTabId) this.splitMode = "none";
+      }
+      if (this.splitMode === "none") {
+        if (this.activeTabId === tab.id) this.activeTabId = this.tabs[Math.min(index, this.tabs.length - 1)]?.id || this.tabs[0].id;
+        this.primaryTabId = this.activeTabId;
+      } else if (this.activeTabId === tab.id || !this.isTabVisible(this.activeTabId)) {
+        this.activeTabId = this.primaryTabId;
+      }
+      this.$nextTick(() => this.scheduleFit());
     },
     connect(this: TerminalView): void {
       if (this.activeTab) this.connectTab(this.activeTab);
@@ -348,7 +394,7 @@ export const terminalViewComponent = {
             if (tab.terminalSocket !== terminalSocket) return;
             tab.connectionState = "connected";
             tab.errorMessage = "";
-            if (tab.id === this.activeTabId) this.fit();
+            if (this.isTabVisible(tab.id)) this.fitVisible();
             tab.terminalSocket?.send({
               type: "resize",
               cols: tab.terminal?.cols || 120,
@@ -399,11 +445,25 @@ export const terminalViewComponent = {
         // DSM can briefly report a zero-sized window during its opening animation.
       }
     },
+    fitVisible(this: TerminalView): void {
+      for (const tab of this.tabs) {
+        if (!this.isTabVisible(tab.id) || !tab.fitAddon || !tab.terminal) continue;
+        try {
+          tab.fitAddon.fit();
+        } catch {
+          // DSM can briefly report a zero-sized pane during layout changes.
+        }
+      }
+    },
     scheduleFit(this: TerminalView): void {
       if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
       this.fitFrame = requestAnimationFrame(() => {
         this.fitFrame = null;
-        this.fit();
+        if (this.splitMode !== "none" && this.$refs.terminalHost.clientWidth < 620) {
+          this.closeSplit();
+          return;
+        }
+        this.fitVisible();
       });
     },
     showNotice(this: TerminalView, message: string): void {
@@ -498,6 +558,32 @@ export const terminalViewComponent = {
           activeMatchColorOverviewRuler: "#b286ff",
         },
       });
+    },
+    enableSplit(this: TerminalView, mode: "vertical" | "horizontal"): void {
+      if (this.tabs.length < 2) return;
+      if (this.$refs.terminalHost.clientWidth < 620) {
+        this.showNotice(this.text.splitNeedsSpace);
+        return;
+      }
+      if (this.splitMode === "none") {
+        this.primaryTabId = this.activeTabId;
+        this.secondaryTabId = this.tabs.find((tab) => tab.id !== this.primaryTabId)?.id || 0;
+      }
+      this.splitMode = mode;
+      this.$nextTick(() => this.fitVisible());
+    },
+    closeSplit(this: TerminalView): void {
+      this.splitMode = "none";
+      this.primaryTabId = this.activeTabId;
+      this.secondaryTabId = 0;
+      this.$nextTick(() => this.fitVisible());
+    },
+    activatePane(this: TerminalView, tabId: number): void {
+      if (!this.isTabVisible(tabId)) return;
+      this.activeTabId = tabId;
+    },
+    isTabVisible(this: TerminalView, tabId: number): boolean {
+      return tabId === this.primaryTabId || (this.splitMode !== "none" && tabId === this.secondaryTabId);
     },
     handleDragEnter(this: TerminalView, event: DragEvent): void {
       if (!event.dataTransfer?.types.includes("Files")) return;

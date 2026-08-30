@@ -96,7 +96,7 @@ test("prevents DSM tokens from entering nginx access logs", () => {
 test("sends the fitted terminal size as soon as the websocket opens", () => {
   const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
   const openHandler = view.slice(view.indexOf("onOpen:"), view.indexOf("onClose:"));
-  assert.match(openHandler, /this\.fit\(\)/u);
+  assert.match(openHandler, /this\.fitVisible\(\)/u);
   assert.match(openHandler, /type: "resize"/u);
   assert.match(openHandler, /tab\.terminal\?\.cols/u);
   assert.match(openHandler, /tab\.terminal\?\.rows/u);
@@ -127,7 +127,7 @@ test("keeps one independent terminal connection per shell tab", () => {
   assert.match(view, /v-for="tab in tabs"/u);
   assert.match(view, /terminalSocket: null/u);
   assert.match(view, /tab\.terminalSocket\?\.disconnect\(\)/u);
-  assert.match(view, /if \(this\.tabs\.length === 0\) this\.addTab\(\)/u);
+  assert.match(view, /if \(this\.tabs\.length === 0\) \{[\s\S]*this\.addTab\(\)/u);
 });
 
 test("gates terminal clipboard shortcuts behind one explicit action", () => {
@@ -183,4 +183,16 @@ test("uploads dropped files through an authenticated bounded endpoint", () => {
   assert.match(view, /handleDrop/u);
   assert.match(view, /shellQuote/u);
   assert.match(socket, /X-Syno-Token/u);
+});
+
+test("shows two existing shell tabs in a responsive split view", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
+  assert.match(view, /primaryTabId/u);
+  assert.match(view, /secondaryTabId/u);
+  assert.match(view, /enableSplit/u);
+  assert.match(view, /isTabVisible/u);
+  assert.match(view, /clientWidth < 620/u);
+  assert.match(styles, /split-vertical/u);
+  assert.match(styles, /split-horizontal/u);
 });

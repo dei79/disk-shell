@@ -167,6 +167,21 @@
   background: $background;
 }
 
+.diskshell-panes {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+
+  &.split-none { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+  &.split-vertical { grid-template: minmax(0, 1fr) / repeat(2, minmax(0, 1fr)); }
+  &.split-horizontal { grid-template: repeat(2, minmax(0, 1fr)) / minmax(0, 1fr); }
+
+  &.split-vertical .diskshell-canvas + .diskshell-canvas { border-left: 1px solid $border; }
+  &.split-horizontal .diskshell-canvas + .diskshell-canvas { border-top: 1px solid $border; }
+}
+
 .diskshell-search {
   position: absolute;
   z-index: 10;
@@ -233,9 +248,13 @@
   overflow: hidden;
   background: $background;
 
+  &.active-pane { box-shadow: inset 0 0 0 1px rgba($accent, .55); }
+
   .xterm { height: 100%; }
   .xterm-viewport { scrollbar-color: $border $background; }
 }
+
+.diskshell-panes .diskshell-canvas { height: auto; }
 
 .diskshell-session-panel {
   position: absolute;
