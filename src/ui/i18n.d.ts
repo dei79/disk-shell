@@ -2,9 +2,13 @@ import type { ConnectionState } from "./types.js";
 
 export type Messages = {
   subtitle: string;
-  copy: string;
-  paste: string;
+  allowClipboard: string;
+  clipboardAllowed: string;
   reconnect: string;
+  newTab: string;
+  closeTab: string;
+  tabsAriaLabel: string;
+  tabTitle: string;
   terminalAriaLabel: string;
   connectingTerminal: string;
   connectionFailed: string;

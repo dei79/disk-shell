@@ -96,8 +96,8 @@ test("sends the fitted terminal size as soon as the websocket opens", () => {
   const openHandler = view.slice(view.indexOf("onOpen:"), view.indexOf("onClose:"));
   assert.match(openHandler, /this\.fit\(\)/u);
   assert.match(openHandler, /type: "resize"/u);
-  assert.match(openHandler, /this\.terminal\?\.cols/u);
-  assert.match(openHandler, /this\.terminal\?\.rows/u);
+  assert.match(openHandler, /tab\.terminal\?\.cols/u);
+  assert.match(openHandler, /tab\.terminal\?\.rows/u);
 });
 
 test("fits the terminal from container-driven DSM window resizes", () => {
@@ -113,7 +113,27 @@ test("fits the terminal from container-driven DSM window resizes", () => {
 test("keeps the status bar compact when the optional alert is absent", () => {
   const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
   assert.match(styles, /\.diskshell-toolbar\s*\{[^}]*grid-row:\s*1/u);
-  assert.match(styles, /\.diskshell-alert\s*\{[^}]*grid-row:\s*2/u);
-  assert.match(styles, /\.diskshell-canvas\s*\{[^}]*grid-row:\s*3/u);
-  assert.match(styles, /\.diskshell-status\s*\{[^}]*grid-row:\s*4/u);
+  assert.match(styles, /\.diskshell-tabs\s*\{[^}]*grid-row:\s*2/u);
+  assert.match(styles, /\.diskshell-alert\s*\{[^}]*grid-row:\s*3/u);
+  assert.match(styles, /\.diskshell-terminal-host\s*\{[^}]*grid-row:\s*4/u);
+  assert.match(styles, /\.diskshell-status\s*\{[^}]*grid-row:\s*5/u);
+});
+
+test("keeps one independent terminal connection per shell tab", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  assert.match(view, /const maxTabs = 4/u);
+  assert.match(view, /v-for="tab in tabs"/u);
+  assert.match(view, /terminalSocket: null/u);
+  assert.match(view, /tab\.terminalSocket\?\.disconnect\(\)/u);
+  assert.match(view, /if \(this\.tabs\.length === 0\) this\.addTab\(\)/u);
+});
+
+test("gates terminal clipboard shortcuts behind one explicit action", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  assert.match(view, /allowClipboard/u);
+  assert.match(view, /attachCustomKeyEventHandler/u);
+  assert.match(view, /event\.ctrlKey && event\.shiftKey/u);
+  assert.match(view, /navigator\.clipboard\.writeText/u);
+  assert.match(view, /navigator\.clipboard\.readText/u);
+  assert.doesNotMatch(view, /copySelection|pasteClipboard/u);
 });

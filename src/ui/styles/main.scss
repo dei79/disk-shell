@@ -3,7 +3,7 @@
 .diskshell-shell {
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -56,7 +56,7 @@
 }
 
 .diskshell-alert {
-  grid-row: 2;
+  grid-row: 3;
   padding: 9px 14px;
   border-bottom: 1px solid rgba($danger, .45);
   color: #ffd4d4;
@@ -64,8 +64,83 @@
   font-size: 12px;
 }
 
+.diskshell-tabs {
+  grid-row: 2;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid $border;
+  background: $panel;
+  scrollbar-width: thin;
+}
+
+.diskshell-tab {
+  display: flex;
+  flex: 0 1 180px;
+  min-width: 110px;
+  max-width: 200px;
+  border-right: 1px solid $border;
+
+  &:first-child { border-left: 1px solid $border; }
+  &.active { background: $background; box-shadow: inset 0 2px 0 $accent; }
+
+  > button:first-child {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 0 8px;
+    overflow: hidden;
+    border: 0;
+    color: $text;
+    background: transparent;
+    cursor: pointer;
+
+    span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+}
+
+.diskshell-tab-status {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: $muted;
+
+  &.connected { background: $success; }
+  &.connecting { background: #f1c75b; }
+  &.error { background: $danger; }
+}
+
+.diskshell-tab-close,
+.diskshell-new-tab {
+  flex: 0 0 30px;
+  border: 0;
+  color: $muted;
+  background: transparent;
+  cursor: pointer;
+
+  &:hover:not(:disabled) { color: $text; background: $panel-raised; }
+  &:focus-visible { outline: 2px solid $accent-hover; outline-offset: -2px; }
+  &:disabled { opacity: .35; cursor: default; }
+}
+
+.diskshell-new-tab { flex-basis: 36px; font-size: 18px; }
+
+.diskshell-terminal-host {
+  grid-row: 4;
+  min-width: 0;
+  min-height: 0;
+  background: $background;
+}
+
 .diskshell-canvas {
-  grid-row: 3;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   padding: 10px 12px;
@@ -77,7 +152,7 @@
 }
 
 .diskshell-status {
-  grid-row: 4;
+  grid-row: 5;
   display: flex;
   align-items: center;
   gap: 8px;
