@@ -48,7 +48,9 @@ test("builds a self-contained DiskShell SPK", () => {
 });
 
 test("keeps terminal authentication and transport boundaries explicit", () => {
-  const backend = readFileSync(join(integration, "native/main.go"), "utf8");
+  const backend = ["main.go", "session.go"]
+    .map((file) => readFileSync(join(integration, "native", file), "utf8"))
+    .join("\n");
   assert.match(backend, /authenticate\.cgi/u);
   assert.match(backend, /administrators/u);
   assert.match(backend, /CheckOrigin:\s+allowedOrigin/u);
@@ -136,4 +138,18 @@ test("gates terminal clipboard shortcuts behind one explicit action", () => {
   assert.match(view, /navigator\.clipboard\.writeText/u);
   assert.match(view, /navigator\.clipboard\.readText/u);
   assert.doesNotMatch(view, /copySelection|pasteClipboard/u);
+});
+
+test("separates persistent shell sessions from websocket lifetimes", () => {
+  const backend = readFileSync(join(integration, "native/session.go"), "utf8");
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
+  assert.match(backend, /type sessionManager struct/u);
+  assert.match(backend, /maxSessionOutput/u);
+  assert.match(backend, /session\.persistent/u);
+  assert.match(view, /togglePersistent/u);
+  assert.match(view, /hidePendingTab/u);
+  assert.match(view, /backgroundSessions/u);
+  assert.match(socket, /listBackgroundSessions/u);
+  assert.match(socket, /type: "open"/u);
 });

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/user"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestAllowedOrigin(t *testing.T) {
@@ -164,22 +168,10 @@ func TestTerminalRejectsWhenAuthenticationCapacityIsExhausted(t *testing.T) {
 }
 
 func TestTerminalRejectsWhenShellCapacityIsExhausted(t *testing.T) {
-	account, err := user.Current()
-	if err != nil {
-		t.Skipf("current account is unavailable: %v", err)
-	}
-	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
-	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
-	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 	fillSlots(t, shellSlots)
-
-	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
-	request.Host = "dsm.local"
-	request.Header.Set("Origin", "http://dsm.local")
-	response := httptest.NewRecorder()
-	terminal(response, request)
-	if response.Code != 503 {
-		t.Fatalf("exhausted shell capacity returned HTTP %d", response.Code)
+	manager := newSessionManager()
+	if _, err := manager.create(&identity{username: "test", home: "/tmp"}, "Shell"); !errors.Is(err, errServiceBusy) {
+		t.Fatalf("exhausted shell capacity returned %v", err)
 	}
 }
 
@@ -227,6 +219,158 @@ func TestShellSlotIsReleasedAfterUpgradeFailure(t *testing.T) {
 	terminal(response, request)
 	if len(shellSlots) != 0 {
 		t.Fatal("shell slot was not released after WebSocket upgrade failure")
+	}
+}
+
+func TestSessionOutputBufferIsBounded(t *testing.T) {
+	first := make([]byte, maxSessionOutput-2)
+	result := appendSessionOutput(first, []byte("abcd"))
+	if len(result) != maxSessionOutput || string(result[len(result)-4:]) != "abcd" {
+		t.Fatalf("unexpected bounded session output: %d bytes", len(result))
+	}
+}
+
+func TestSessionNamesAreValidated(t *testing.T) {
+	if !validSessionName("Backup job") || validSessionName("") || validSessionName("bad\nname") {
+		t.Fatal("session name validation accepted an invalid value")
+	}
+	if validSessionName(strings.Repeat("x", maxSessionName+1)) {
+		t.Fatal("oversized session name was accepted")
+	}
+}
+
+func TestSessionListingIsPersistentAndOwnerScoped(t *testing.T) {
+	manager := newSessionManager()
+	manager.sessions["owned"] = &shellSession{
+		manager: manager, id: "owned", owner: "alice", name: "Backup", persistent: true, running: true, lastActivity: time.Now(),
+	}
+	manager.sessions["temporary"] = &shellSession{
+		manager: manager, id: "temporary", owner: "alice", name: "Temporary", running: true, lastActivity: time.Now(),
+	}
+	manager.sessions["foreign"] = &shellSession{
+		manager: manager, id: "foreign", owner: "bob", name: "Foreign", persistent: true, running: true, lastActivity: time.Now(),
+	}
+	sessions := manager.list("alice")
+	if len(sessions) != 1 || sessions[0].ID != "owned" {
+		t.Fatalf("unexpected owner-scoped sessions: %#v", sessions)
+	}
+}
+
+func TestSessionReservationsAreLimitedPerOwner(t *testing.T) {
+	manager := newSessionManager()
+	for index := 0; index < maxUserSessions; index++ {
+		if !manager.reserve("alice") {
+			t.Fatalf("reservation %d was rejected", index)
+		}
+	}
+	if manager.reserve("alice") {
+		t.Fatal("owner session limit was not enforced")
+	}
+	if !manager.reserve("bob") {
+		t.Fatal("one owner exhausted another owner's limit")
+	}
+}
+
+func TestPersistentSessionCanDetachReplayReattachAndTerminate(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Skipf("current account is unavailable: %v", err)
+	}
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+
+	previousStore := sessionStore
+	manager := newSessionManager()
+	sessionStore = manager
+	server := httptest.NewServer(http.HandlerFunc(terminal))
+	t.Cleanup(func() {
+		manager.shutdown()
+		server.Close()
+		sessionStore = previousStore
+	})
+
+	first := dialTestTerminal(t, server.URL)
+	if err := first.WriteJSON(clientMessage{Type: "open", Name: "Background test"}); err != nil {
+		t.Fatal(err)
+	}
+	opened := waitForSessionMessage(t, first, func(info sessionInfo) bool { return info.ID != "" })
+	if err := first.WriteJSON(clientMessage{Type: "persist", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForSessionMessage(t, first, func(info sessionInfo) bool { return info.Persistent })
+	marker := "__DISKSHELL_REPLAY__"
+	if err := first.WriteJSON(clientMessage{Type: "input", Data: "printf '" + marker + "\\n'; sleep 30\n"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForTerminalOutput(t, first, marker)
+	_ = first.Close()
+
+	second := dialTestTerminal(t, server.URL)
+	if err := second.WriteJSON(clientMessage{Type: "open", SessionID: opened.ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForSessionMessage(t, second, func(info sessionInfo) bool { return info.ID == opened.ID })
+	waitForTerminalOutput(t, second, marker)
+	if err := second.WriteJSON(clientMessage{Type: "terminate"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for manager.find(account.Username, opened.ID) != nil || len(shellSlots) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("terminated session remained registered or held a slot: sessions=%d slots=%d", len(manager.sessions), len(shellSlots))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func dialTestTerminal(t *testing.T, serverURL string) *websocket.Conn {
+	t.Helper()
+	header := http.Header{"Origin": []string{serverURL}}
+	connection, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(serverURL, "http")+"/diskshell/ws", header)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("websocket dial returned HTTP %d: %v", response.StatusCode, err)
+		}
+		t.Fatal(err)
+	}
+	return connection
+}
+
+func waitForSessionMessage(t *testing.T, connection *websocket.Conn, accept func(sessionInfo) bool) sessionInfo {
+	t.Helper()
+	for {
+		_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var message serverMessage
+		if err := connection.ReadJSON(&message); err != nil {
+			t.Fatalf("waiting for session message: %v", err)
+		}
+		if message.Type == "error" {
+			t.Fatalf("terminal returned %s: %s", message.Code, message.Message)
+		}
+		if message.Type == "session" && message.Session != nil && accept(*message.Session) {
+			return *message.Session
+		}
+	}
+}
+
+func waitForTerminalOutput(t *testing.T, connection *websocket.Conn, marker string) {
+	t.Helper()
+	var output strings.Builder
+	for {
+		_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var message serverMessage
+		if err := connection.ReadJSON(&message); err != nil {
+			t.Fatalf("waiting for terminal output %q: %v", marker, err)
+		}
+		if message.Type == "output" {
+			output.WriteString(message.Data)
+			if strings.Contains(output.String(), marker) {
+				return
+			}
+		}
 	}
 }
 
