@@ -22,6 +22,12 @@ The SPK is written to `build/DiskShell-<version>-<revision>.spk`. Increment
 the default `packageRevision` in `build.mjs` before creating another installable package build so DSM does
 not reuse cached desktop assets.
 
+## Releases
+
+Pushing a semantic version tag such as `v0.1.0` runs the release workflow. The
+tag must match the version in `package.json`; successful builds publish the SPK
+and its SHA-256 checksum as a GitHub Release.
+
 The service listens only on `127.0.0.1:16082`. DSM's nginx proxy exposes the
 WebSocket under `/diskshell/`; it is not a separately published network port.
 

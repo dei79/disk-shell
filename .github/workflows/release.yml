@@ -1,0 +1,137 @@
+name: Release SPK
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build SPK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.7"
+          cache-dependency-path: go.sum
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a semantic version tag such as v0.1.0, got ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          package_version="$(node --print "require('./package.json').version")"
+          if [[ "$version" != "$package_version" ]]; then
+            echo "Tag version ${version} does not match package.json version ${package_version}." >&2
+            exit 1
+          fi
+          echo "DISKSHELL_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "DISKSHELL_SPK_PATH=build/DiskShell-${version}-1.spk" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check types
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build SPK
+        env:
+          DISKSHELL_PACKAGE_REVISION: "1"
+        run: npm run build
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$DISKSHELL_SPK_PATH"
+          spk_name="$(basename "$DISKSHELL_SPK_PATH")"
+          (
+            cd build
+            sha256sum "$spk_name" > "$spk_name.sha256"
+            sha256sum --check "$spk_name.sha256"
+          )
+
+      - name: Upload release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diskshell-release
+          path: |
+            build/*.spk
+            build/*.spk.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: diskshell-release
+          path: build
+
+      - name: Validate downloaded files
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          echo "DISKSHELL_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "DISKSHELL_SPK_PATH=build/DiskShell-${version}-1.spk" >> "$GITHUB_ENV"
+          test -f "build/DiskShell-${version}-1.spk"
+          (cd build && sha256sum --check "DiskShell-${version}-1.spk.sha256")
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --draft \
+              --title "DiskShell $DISKSHELL_RELEASE_VERSION" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            "$DISKSHELL_SPK_PATH" \
+            "$DISKSHELL_SPK_PATH.sha256" \
+            --clobber
+          gh release edit "$GITHUB_REF_NAME" \
+            --draft=false \
+            --title "DiskShell $DISKSHELL_RELEASE_VERSION"
