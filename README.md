@@ -1,58 +1,152 @@
 # DiskShell
 
-Native DSM 7.2 desktop terminal packaged as an SPK. The browser UI is written in
-TypeScript and SCSS and uses xterm.js. A small Go service authenticates the active
-DSM session, permits administrators only, and launches `/bin/sh` under the
-authenticated DSM account through a pseudo-terminal.
+A secure, native terminal for the Synology DSM desktop. DiskShell gives DSM
+administrators a modern multi-tab shell with persistent sessions, split views,
+search, uploads, and explicit clipboard controls—without exposing a separate
+terminal port on the network.
 
-## Local build
+![DiskShell showing a system overview and backup monitor in a side-by-side shell view](docs/disk-shell-screenshot.png)
 
-Building installable packages requires Go 1.26 or newer. Set
-`DISKSHELL_GO_BINARY` to an explicit Go executable when multiple toolchains are
-installed.
+## Features
+
+- **Multiple shell tabs** — work in up to four independent terminals in one DSM
+  window and rename them for quick orientation.
+- **Background sessions** — keep a shell and its processes running after its tab
+  or the DiskShell window is closed, then reopen it later.
+- **Split view** — place two existing tabs side by side or one above the other,
+  with clear pane ownership and independent terminal sizing.
+- **Terminal search** — search each tab's scrollback with `⌘F` or `Ctrl+F` and
+  navigate between matches.
+- **Drag-and-drop uploads** — securely upload files into a private directory for
+  the authenticated DSM account and insert their quoted paths into the shell.
+- **Deliberate clipboard access** — Copy & Paste remains disabled until it is
+  explicitly enabled for the current DiskShell window.
+- **DSM-native authentication** — uses the current DSM session, allows DSM
+  administrators only, and starts the shell under the authenticated account.
+- **Responsive toolbar** — accessible icon controls, state-aware tooltips, and a
+  compact layout that adapts to the DSM window.
+
+## Installation
+
+DiskShell currently targets **DSM 7.2 on x86_64 Synology systems**.
+
+1. Download the latest `.spk` and its checksum from
+   [GitHub Releases](https://github.com/dei79/disk-shell/releases/latest).
+2. Verify the downloaded package against the `.sha256` file.
+3. In DSM, open **Package Center → Manual Install** and select the SPK.
+4. Launch **DiskShell** from the DSM main menu while signed in as an
+   administrator.
+
+DiskShell's service listens only on `127.0.0.1:16082`. DSM's nginx proxy exposes
+the application under `/diskshell/`; no additional network port is published.
+
+## Build from source
+
+### Requirements
+
+- Node.js 22 or newer
+- npm
+- Go 1.26 or newer
+- GNU `tar`
+
+Install dependencies, validate the project, and build an SPK:
 
 ```sh
-npm install
+npm ci
 npm run check
 npm test
 npm run build
 ```
 
-The SPK is written to `build/DiskShell-<version>-<revision>.spk`. Increment
-the default `packageRevision` in `build.mjs` before creating another installable package build so DSM does
-not reuse cached desktop assets.
+The package is written to:
 
-## Releases
+```text
+build/DiskShell-<version>-<revision>.spk
+```
 
-Pushing a semantic version tag such as `v0.1.0` runs the release workflow. The
-tag must match the version in `package.json`; successful builds publish the SPK
-and its SHA-256 checksum as a GitHub Release.
+When multiple Go toolchains are installed, select one explicitly:
 
-The service listens only on `127.0.0.1:16082`. DSM's nginx proxy exposes the
-WebSocket under `/diskshell/`; it is not a separately published network port.
+```sh
+DISKSHELL_GO_BINARY=/path/to/go npm run build
+```
+
+Use a unique package revision for every package installed on a live DSM system.
+This prevents DSM from reusing cached JavaScript or CSS assets:
+
+```sh
+DISKSHELL_PACKAGE_REVISION=42 npm run build
+```
+
+## Architecture and security
+
+The browser UI is written in TypeScript and SCSS and uses xterm.js. A compact Go
+service validates the active DSM session, verifies membership in the DSM
+`administrators` group, and launches `/bin/sh` under that account through a
+pseudo-terminal.
+
+Important boundaries include:
+
+- same-origin checks for terminal, session, and upload requests;
+- bounded WebSocket messages, terminal output buffers, uploads, and concurrent
+  shell sessions;
+- per-account ownership for sessions and uploaded files;
+- no DSM tokens in nginx access logs;
+- a loopback-only backend behind DSM's existing web proxy.
+
+Background sessions live inside the DiskShell service. They survive browser and
+DiskShell window closures, but not a package restart, DSM reboot, or service
+failure.
+
+## Project layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/ui/` | DSM desktop UI, terminal components, styles, and translations |
+| `native/` | Go HTTP/WebSocket service, session manager, PTY, and uploads |
+| `payload/` | Files installed into the SPK payload |
+| `conf/` | DSM package permissions and resource declarations |
+| `scripts/` | DSM package lifecycle and service scripts |
+| `test/` | Package, security-boundary, and integration tests |
+| `build.mjs` | Deterministic frontend, native binary, and SPK build |
 
 ## Live DSM verification
 
-Use only a disposable DSM test system. Configure `BURSULA_TEST_VM_URL`,
-`BURSULA_TEST_VM_USERNAME`, and `BURSULA_TEST_VM_PASSWORD` in the ignored `.env`
-file, build a new package revision, and install the SPK through Package Center or
-`synopkg`.
-
-After installation:
+Use a disposable DSM test system and a unique package revision. After
+installation:
 
 1. Confirm `/diskshell/health` returns `{"status":"ok"}` through the DSM URL.
-2. Open **DiskShell** from the DSM main menu as an administrator and run
-   `printf '__DISKSHELL_OK__\\n'; id -un; stty size`.
-3. Verify the marker, the logged-in DSM account, and a non-zero terminal size are
-   printed, then resize the window and run `stty size` again.
-4. Verify a same-host request without a DSM session gets HTTP 401 and a request
-   with `Origin: https://attacker.example` gets HTTP 403.
-5. Log in with a disposable non-administrator account and confirm that the
-   terminal refuses the connection and never presents a shell prompt.
+2. Open DiskShell as a DSM administrator and run:
 
-Keep the package revision unique for every live run so DSM does not reuse cached
-JavaScript or CSS assets.
+   ```sh
+   printf '__DISKSHELL_OK__\n'
+   id -un
+   stty size
+   ```
+
+3. Verify the marker, authenticated account, and a non-zero terminal size.
+4. Resize the DSM window and verify `stty size` changes accordingly.
+5. Confirm non-administrator accounts cannot open a shell.
+
+## Contributing
+
+Contributions are welcome. Keep changes focused and preserve the authentication
+and privilege boundaries.
+
+1. Fork the repository and create a feature branch.
+2. Install dependencies with `npm ci`.
+3. Make the change and add or update relevant tests.
+4. Run `npm run check` and `npm test`.
+5. Open a pull request describing the behavior, security impact, and DSM testing
+   performed.
+
+Please do not test package installation on a production NAS.
+
+## Releases
+
+The version in `package.json` must match the semantic Git tag. Pushing a tag such
+as `v1.1.0` runs the release workflow, builds revision `1`, generates a SHA-256
+checksum, and publishes both files as a GitHub Release.
 
 ## License
 
-DiskShell is available under the MIT License. See [LICENSE](LICENSE).
+DiskShell is available under the [MIT License](LICENSE).
