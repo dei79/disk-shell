@@ -160,9 +160,48 @@
 .diskshell-new-tab { flex-basis: 36px; font-size: 18px; }
 
 .diskshell-terminal-host {
+  position: relative;
   grid-row: 4;
   min-width: 0;
   min-height: 0;
+  background: $background;
+}
+
+.diskshell-search {
+  position: absolute;
+  z-index: 10;
+  top: 8px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid $border;
+  border-radius: 6px;
+  background: $panel;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+
+  span { min-width: 58px; color: $muted; font-size: 11px; text-align: center; }
+
+  button {
+    width: 28px;
+    height: 28px;
+    border: 1px solid $border;
+    border-radius: 4px;
+    color: $text;
+    background: $panel-raised;
+    cursor: pointer;
+  }
+}
+
+.diskshell-search-input {
+  width: min(260px, 35vw);
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid $accent-hover;
+  border-radius: 4px;
+  outline: 0;
+  color: $text;
   background: $background;
 }
 
@@ -333,4 +372,6 @@
   .diskshell-actions button { flex: 1 1 0; padding-inline: 8px; }
   .diskshell-session-item { grid-template-columns: 1fr auto; }
   .diskshell-session-item > div { grid-column: 1 / -1; }
+  .diskshell-search { right: 8px; left: 8px; }
+  .diskshell-search-input { width: 100%; min-width: 0; }
 }

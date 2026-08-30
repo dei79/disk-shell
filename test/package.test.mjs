@@ -163,3 +163,12 @@ test("renames open and background shell sessions", () => {
   assert.match(view, /beginSessionRename/u);
   assert.match(socket, /renameBackgroundSession/u);
 });
+
+test("searches each terminal tab independently", () => {
+  const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  assert.match(view, /SearchAddon/u);
+  assert.match(view, /searchQuery: ""/u);
+  assert.match(view, /findNext/u);
+  assert.match(view, /findPrevious/u);
+  assert.match(view, /event\.shiftKey && event\.key\.toLowerCase\(\) === "f"/u);
+});

@@ -12,6 +12,12 @@ export type Messages = {
   renameSession: string;
   invalidSessionName: string;
   renameFailed: string;
+  search: string;
+  searchPlaceholder: string;
+  previousResult: string;
+  nextResult: string;
+  noResults: string;
+  closeSearch: string;
   sessions: string;
   backgroundSessions: string;
   keepAlive: string;

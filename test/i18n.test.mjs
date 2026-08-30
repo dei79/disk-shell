@@ -11,5 +11,6 @@ test("uses English by default and German only for DSM ger", () => {
   assert.equal(selectMessages("ger").keepAlive, "Im Hintergrund behalten");
   assert.equal(selectMessages("enu").hideTab, "Hide tab");
   assert.equal(selectMessages("ger").renameSession, "Session umbenennen");
+  assert.equal(selectMessages("ger").search, "Suchen");
   assert.equal(selectMessages("GER").status.connected, "Verbunden");
 });

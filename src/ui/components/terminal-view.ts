@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 
 import {
@@ -24,6 +25,10 @@ type ShellTab = {
   errorMessage: string;
   terminal: Terminal | null;
   fitAddon: FitAddon | null;
+  searchAddon: SearchAddon | null;
+  searchQuery: string;
+  searchResultIndex: number;
+  searchResultCount: number;
   terminalSocket: TerminalSocket | null;
 };
 
@@ -35,6 +40,7 @@ type TerminalView = {
   clipboardEnabled: boolean;
   backgroundSessions: SessionInfo[];
   sessionsOpen: boolean;
+  searchOpen: boolean;
   pendingCloseTab: ShellTab | null;
   notice: string;
   noticeTimer: number | null;
@@ -59,6 +65,10 @@ type TerminalView = {
   beginSessionRename(session: SessionInfo): void;
   commitRename(): Promise<void>;
   cancelRename(): void;
+  openSearch(): void;
+  closeSearch(): void;
+  searchNext(): void;
+  searchPrevious(): void;
   connect(): void;
   fit(): void;
   scheduleFit(): void;
@@ -72,6 +82,7 @@ export const terminalViewComponent = {
     '    <div><strong>DiskShell</strong><span>{{ text.subtitle }}</span></div>',
     '    <div class="diskshell-actions">',
     '      <button type="button" class="sessions" v-if="backgroundSessions.length" @click="sessionsOpen = !sessionsOpen">{{ text.sessions }} · {{ backgroundSessions.length }}</button>',
+    '      <button type="button" v-if="activeTab" @click="openSearch">{{ text.search }}</button>',
     '      <button type="button" v-if="activeTab && connected" @click="togglePersistent">{{ activeTab.persistent ? text.keepAliveEnabled : text.keepAlive }}</button>',
     '      <button type="button" @click="allowClipboard" :disabled="clipboardEnabled">{{ clipboardEnabled ? text.clipboardAllowed : text.allowClipboard }}</button>',
     '      <button type="button" class="primary" @click="connect" v-if="activeTab && !connected && activeTab.processState !== \'exited\'">{{ text.reconnect }}</button>',
@@ -101,6 +112,13 @@ export const terminalViewComponent = {
     '  </aside>',
     '  <div v-if="activeTab && activeTab.errorMessage" class="diskshell-alert" role="alert">{{ activeTab.errorMessage }}</div>',
     '  <div ref="terminalHost" class="diskshell-terminal-host">',
+    '    <div v-if="searchOpen && activeTab" class="diskshell-search" role="search" @keydown.esc.prevent="closeSearch">',
+    '      <input class="diskshell-search-input" v-model="activeTab.searchQuery" :placeholder="text.searchPlaceholder" :aria-label="text.search" @input="searchNext" @keydown.enter.prevent="searchNext">',
+    '      <span aria-live="polite">{{ activeTab.searchResultCount ? (activeTab.searchResultIndex + 1) + \' / \' + activeTab.searchResultCount : text.noResults }}</span>',
+    '      <button type="button" :aria-label="text.previousResult" :title="text.previousResult" @click="searchPrevious">↑</button>',
+    '      <button type="button" :aria-label="text.nextResult" :title="text.nextResult" @click="searchNext">↓</button>',
+    '      <button type="button" :aria-label="text.closeSearch" :title="text.closeSearch" @click="closeSearch">×</button>',
+    '    </div>',
     `    <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="tab.id === activeTabId" class="diskshell-canvas" :aria-label="text.terminalAriaLabel + ': ' + tab.title"></div>`,
     '  </div>',
     '  <terminal-status-bar v-if="activeTab" :state="activeTab.connectionState" :text="text"></terminal-status-bar>',
@@ -127,6 +145,7 @@ export const terminalViewComponent = {
       clipboardEnabled: false,
       backgroundSessions: [] as SessionInfo[],
       sessionsOpen: false,
+      searchOpen: false,
       pendingCloseTab: null as ShellTab | null,
       notice: "",
       noticeTimer: null as number | null,
@@ -196,6 +215,10 @@ export const terminalViewComponent = {
         errorMessage: "",
         terminal: null,
         fitAddon: null,
+        searchAddon: null,
+        searchQuery: "",
+        searchResultIndex: -1,
+        searchResultCount: 0,
         terminalSocket: null,
       });
       this.activeTabId = id;
@@ -227,7 +250,13 @@ export const terminalViewComponent = {
         },
       });
       tab.fitAddon = new FitAddon();
+      tab.searchAddon = new SearchAddon();
       tab.terminal.loadAddon(tab.fitAddon);
+      tab.terminal.loadAddon(tab.searchAddon);
+      tab.searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
+        tab.searchResultIndex = resultIndex;
+        tab.searchResultCount = resultCount;
+      });
       tab.terminal.open(canvas);
       tab.terminal.onData((data) => tab.terminalSocket?.send({ type: "input", data }));
       tab.terminal.onResize(({ cols, rows }) => tab.terminalSocket?.send({ type: "resize", cols, rows }));
@@ -413,11 +442,55 @@ export const terminalViewComponent = {
       this.renamingSessionId = "";
       this.renameValue = "";
     },
+    openSearch(this: TerminalView): void {
+      this.searchOpen = true;
+      this.$nextTick(() => document.querySelector<HTMLInputElement>(".diskshell-search-input")?.select());
+    },
+    closeSearch(this: TerminalView): void {
+      this.searchOpen = false;
+      this.activeTab?.searchAddon?.clearDecorations();
+      this.activeTab?.terminal?.focus();
+    },
+    searchNext(this: TerminalView): void {
+      const tab = this.activeTab;
+      if (!tab?.searchAddon) return;
+      if (!tab.searchQuery) {
+        tab.searchAddon.clearDecorations();
+        tab.searchResultIndex = -1;
+        tab.searchResultCount = 0;
+        return;
+      }
+      tab.searchAddon.findNext(tab.searchQuery, {
+        incremental: true,
+        decorations: {
+          matchBackground: "#35546f",
+          matchOverviewRuler: "#61dafb",
+          activeMatchBackground: "#b286ff",
+          activeMatchColorOverviewRuler: "#b286ff",
+        },
+      });
+    },
+    searchPrevious(this: TerminalView): void {
+      const tab = this.activeTab;
+      if (!tab?.searchAddon || !tab.searchQuery) return;
+      tab.searchAddon.findPrevious(tab.searchQuery, {
+        decorations: {
+          matchBackground: "#35546f",
+          matchOverviewRuler: "#61dafb",
+          activeMatchBackground: "#b286ff",
+          activeMatchColorOverviewRuler: "#b286ff",
+        },
+      });
+    },
     allowClipboard(this: TerminalView): void {
       this.clipboardEnabled = true;
       this.activeTab?.terminal?.focus();
     },
     handleClipboardShortcut(this: TerminalView, tab: ShellTab, event: KeyboardEvent): boolean {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+        this.openSearch();
+        return false;
+      }
       if (!this.clipboardEnabled || !navigator.clipboard || event.type !== "keydown") return true;
       const clipboardShortcut = event.metaKey || (event.ctrlKey && event.shiftKey);
       if (!clipboardShortcut) return true;
