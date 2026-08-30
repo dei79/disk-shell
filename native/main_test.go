@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -338,6 +343,228 @@ func TestSaveUploadUsesPrivateAccountDirectory(t *testing.T) {
 	if fileInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("upload permissions are %o", fileInfo.Mode().Perm())
 	}
+	if filepath.Base(filepath.Dir(info.Path)) != account.Uid {
+		t.Fatalf("upload was not isolated in UID directory: %q", info.Path)
+	}
+}
+
+type uploadLockCheckingReader struct {
+	data    []byte
+	checked bool
+}
+
+func (reader *uploadLockCheckingReader) Read(target []byte) (int, error) {
+	if !reader.checked {
+		if !uploadLock.TryLock() {
+			return 0, errors.New("request body was read while the global upload lock was held")
+		}
+		uploadLock.Unlock()
+		reader.checked = true
+	}
+	if len(reader.data) == 0 {
+		return 0, io.EOF
+	}
+	count := copy(target, reader.data)
+	reader.data = reader.data[count:]
+	return count, nil
+}
+
+func TestSaveUploadDoesNotLockWhileReadingClient(t *testing.T) {
+	account := currentTestIdentity(t)
+	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
+	t.Setenv("DISKSHELL_UPLOAD_ROOT", t.TempDir())
+	reader := &uploadLockCheckingReader{data: []byte("hello")}
+	if _, err := saveUpload(account, "notes.txt", reader); err != nil {
+		t.Fatal(err)
+	}
+	if !reader.checked {
+		t.Fatal("upload source was not read")
+	}
+}
+
+func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
+	t.Setenv("DISKSHELL_UPLOAD_ROOT", root)
+
+	request := newUploadRequest(t, []testUpload{{name: "ok.txt", size: 5}}, 0)
+	request.Header.Set("Origin", "https://attacker.example")
+	response := httptest.NewRecorder()
+	uploadIndex(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin upload returned HTTP %d", response.Code)
+	}
+
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nexit 1\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nexit 1\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "ok.txt", size: 5}}, 0))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated upload returned HTTP %d", response.Code)
+	}
+
+	account := currentTestIdentity(t)
+	authenticateCGI = writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
+	idBinary = writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+strconv.FormatUint(uint64(account.gid), 10)+"; fi\n")
+	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
+
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "ok.txt", size: 5}}, 0))
+	if response.Code != http.StatusOK {
+		t.Fatalf("valid upload returned HTTP %d: %s", response.Code, response.Body.String())
+	}
+	var uploaded uploadResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil || len(uploaded.Uploads) != 1 {
+		t.Fatalf("unexpected upload response %#v: %v", uploaded, err)
+	}
+	if filepath.Base(filepath.Dir(uploaded.Uploads[0].Path)) != strconv.FormatUint(uint64(account.uid), 10) {
+		t.Fatalf("handler did not isolate upload by owner: %q", uploaded.Uploads[0].Path)
+	}
+	resetUploadRoot(t, root)
+
+	tenFiles := make([]testUpload, maxUploadFiles)
+	for index := range tenFiles {
+		tenFiles[index] = testUpload{name: "file-" + strconv.Itoa(index), size: 1}
+	}
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, tenFiles, 0))
+	if response.Code != http.StatusOK {
+		t.Fatalf("ten-file boundary returned HTTP %d: %s", response.Code, response.Body.String())
+	}
+	resetUploadRoot(t, root)
+
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, append(tenFiles, testUpload{name: "eleven", size: 1}), 0))
+	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != 0 {
+		t.Fatalf("too-many-files response=%d remaining=%d", response.Code, uploadFileCount(t, root))
+	}
+
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "large.bin", size: maxUploadFileSize + 1}}, 0))
+	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != 0 {
+		t.Fatalf("oversized-file response=%d remaining=%d", response.Code, uploadFileCount(t, root))
+	}
+
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "first.bin", size: maxUploadFileSize}, {name: "second.bin", size: maxUploadFileSize}}, 2*1024*1024))
+	if response.Code != http.StatusBadRequest || uploadFileCount(t, root) != 0 {
+		t.Fatalf("oversized-request response=%d remaining=%d", response.Code, uploadFileCount(t, root))
+	}
+
+	directory, err := ensureUploadDirectory(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "existing"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(directory, "existing"), maxUploadStorage-1); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "over-quota", size: 2}}, 0))
+	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != 1 {
+		t.Fatalf("storage-limit response=%d remaining=%d", response.Code, uploadFileCount(t, root))
+	}
+}
+
+type testUpload struct {
+	name string
+	size int
+}
+
+func newUploadRequest(t *testing.T, files []testUpload, padding int) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	chunk := bytes.Repeat([]byte{'x'}, 32*1024)
+	for _, upload := range files {
+		part, err := writer.CreateFormFile("files", upload.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		remaining := upload.size
+		for remaining > 0 {
+			count := remaining
+			if count > len(chunk) {
+				count = len(chunk)
+			}
+			if _, err := part.Write(chunk[:count]); err != nil {
+				t.Fatal(err)
+			}
+			remaining -= count
+		}
+	}
+	if padding > 0 {
+		part, err := writer.CreateFormField("padding")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for padding > 0 {
+			count := padding
+			if count > len(chunk) {
+				count = len(chunk)
+			}
+			if _, err := part.Write(chunk[:count]); err != nil {
+				t.Fatal(err)
+			}
+			padding -= count
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://dsm.local/diskshell/uploads", &body)
+	request.Host = "dsm.local"
+	request.Header.Set("Origin", "http://dsm.local")
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func currentTestIdentity(t *testing.T) *identity {
+	t.Helper()
+	account, err := user.Current()
+	if err != nil {
+		t.Skipf("current account is unavailable: %v", err)
+	}
+	uid, err := parseID(account.Uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, err := parseID(account.Gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &identity{username: account.Username, uid: uid, gid: gid, home: account.HomeDir}
+}
+
+func resetUploadRoot(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func uploadFileCount(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			count++
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func TestPersistentSessionCanDetachReplayReattachAndTerminate(t *testing.T) {

@@ -99,6 +99,24 @@ func removeUploads(uploads []uploadInfo) {
 }
 
 func saveUpload(account *identity, originalName string, source io.Reader) (uploadInfo, error) {
+	temporary, err := os.CreateTemp("", "diskshell-upload-*")
+	if err != nil {
+		return uploadInfo{}, errors.New("The upload could not be staged.")
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	size, copyError := io.Copy(temporary, io.LimitReader(source, maxUploadFileSize+1))
+	closeError := temporary.Close()
+	if copyError != nil || closeError != nil {
+		return uploadInfo{}, errors.New("The upload could not be read.")
+	}
+	if size > maxUploadFileSize {
+		return uploadInfo{}, errors.New("A file exceeds the 25 MiB upload limit.")
+	}
+
+	// Only serialize the bounded local-file commit and quota check. Reading the
+	// request body while holding this process-wide lock would let a slow client
+	// block uploads for every DSM account.
 	uploadLock.Lock()
 	defer uploadLock.Unlock()
 	directory, err := ensureUploadDirectory(account)
@@ -106,7 +124,7 @@ func saveUpload(account *identity, originalName string, source io.Reader) (uploa
 		return uploadInfo{}, errors.New("The upload directory is unavailable.")
 	}
 	used, err := directoryBytes(directory)
-	if err != nil || used >= maxUploadStorage {
+	if err != nil || used+size > maxUploadStorage {
 		return uploadInfo{}, errors.New("The upload storage limit has been reached.")
 	}
 	identifier := make([]byte, 8)
@@ -119,13 +137,17 @@ func saveUpload(account *identity, originalName string, source io.Reader) (uploa
 	if err != nil {
 		return uploadInfo{}, errors.New("The upload could not be created.")
 	}
-	size, copyError := io.Copy(file, io.LimitReader(source, maxUploadFileSize+1))
-	closeError := file.Close()
-	if copyError != nil || closeError != nil || size > maxUploadFileSize || used+size > maxUploadStorage {
+	staged, err := os.Open(temporaryPath)
+	if err != nil {
+		_ = file.Close()
 		_ = os.Remove(path)
-		if size > maxUploadFileSize {
-			return uploadInfo{}, errors.New("A file exceeds the 25 MiB upload limit.")
-		}
+		return uploadInfo{}, errors.New("The upload could not be committed.")
+	}
+	_, copyError = io.Copy(file, staged)
+	stagedCloseError := staged.Close()
+	closeError = file.Close()
+	if copyError != nil || stagedCloseError != nil || closeError != nil {
+		_ = os.Remove(path)
 		return uploadInfo{}, errors.New("The upload storage limit has been reached.")
 	}
 	if err := os.Chown(path, int(account.uid), int(account.gid)); err != nil {

@@ -175,6 +175,7 @@ test("searches each terminal tab independently", () => {
 
 test("uploads dropped files through an authenticated bounded endpoint", () => {
   const backend = readFileSync(join(integration, "native", "upload.go"), "utf8");
+  const nginx = readFileSync(join(integration, "payload", "nginx", "diskshell.conf"), "utf8");
   const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
   const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
   assert.match(backend, /maxUploadFileSize/u);
@@ -183,6 +184,8 @@ test("uploads dropped files through an authenticated bounded endpoint", () => {
   assert.match(view, /handleDrop/u);
   assert.match(view, /shellQuote/u);
   assert.match(socket, /X-Syno-Token/u);
+  assert.match(nginx, /client_max_body_size 52m/u);
+  assert.match(nginx, /client_body_timeout 60s/u);
 });
 
 test("shows two existing shell tabs in a responsive split view", () => {
