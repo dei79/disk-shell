@@ -1,5 +1,10 @@
 # Changelog
 
+v1.1.1
+
+- Added a package icon and clickable maintainer, project, and support links for Package Center.
+- Corrected the package maintainer and canonical Go module path.
+
 v1.1.0
 
 - Added renameable shell sessions, terminal search, secure file uploads, and split views.
