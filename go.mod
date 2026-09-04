@@ -1,4 +1,4 @@
-module bursula.local/diskshell
+module github.com/dei79/disk-shell
 
 go 1.26
 
