@@ -10,6 +10,7 @@ import {
   uploadFiles,
 } from "../services/terminal-socket.js";
 import { messages } from "../i18n.js";
+import { handleSearchShortcutEvent } from "../search-shortcuts.js";
 import type { Messages } from "../i18n.js";
 import type { ConnectionState, SessionInfo } from "../types.js";
 import { statusBarComponent } from "./status-bar.js";
@@ -154,7 +155,7 @@ export const terminalViewComponent = {
     '  </aside>',
     '  <div v-if="activeTab && activeTab.errorMessage" class="diskshell-alert" role="alert">{{ activeTab.errorMessage }}</div>',
     '  <div ref="terminalHost" class="diskshell-terminal-host" @dragenter.prevent="handleDragEnter" @dragover.prevent @dragleave.prevent="handleDragLeave" @drop.prevent="handleDrop">',
-    '    <div v-if="searchOpen && activeTab" class="diskshell-search" role="search" @keydown.esc.prevent="closeSearch">',
+    '    <div v-if="searchOpen && activeTab" class="diskshell-search" role="search">',
     '      <input ref="searchInput" class="diskshell-search-input" v-model="activeTab.searchQuery" :placeholder="text.searchPlaceholder" :aria-label="text.search" @input="searchNext" @keydown.enter.prevent="searchNext">',
     '      <span aria-live="polite">{{ activeTab.searchResultCount ? (activeTab.searchResultIndex + 1) + \' / \' + activeTab.searchResultCount : text.noResults }}</span>',
     '      <button type="button" :aria-label="text.previousResult" :title="text.previousResult" @click="searchPrevious">↑</button>',
@@ -228,13 +229,13 @@ export const terminalViewComponent = {
   },
   mounted(this: TerminalView): void {
     this.searchShortcutHandler = (event) => { this.handleSearchShortcut(event); };
-    document.addEventListener("keydown", this.searchShortcutHandler, true);
+    window.addEventListener("keydown", this.searchShortcutHandler, true);
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.$refs.terminalHost);
     void this.restoreSessions();
   },
   beforeDestroy(this: TerminalView): void {
-    if (this.searchShortcutHandler) document.removeEventListener("keydown", this.searchShortcutHandler, true);
+    if (this.searchShortcutHandler) window.removeEventListener("keydown", this.searchShortcutHandler, true);
     this.resizeObserver?.disconnect();
     if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
     if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
@@ -582,13 +583,12 @@ export const terminalViewComponent = {
       this.$nextTick(() => this.$refs.searchInput?.select());
     },
     handleSearchShortcut(this: TerminalView, event: KeyboardEvent): boolean {
-      if (event.type !== "keydown" || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f"
-        || (!event.metaKey && !event.ctrlKey)) return false;
-      if (!(event.target instanceof Node) || !this.$refs.shell.contains(event.target)) return false;
-      event.preventDefault();
-      event.stopPropagation();
-      this.openSearch();
-      return true;
+      return handleSearchShortcutEvent({
+        searchOpen: this.searchOpen,
+        targetIsInside: event.target instanceof Node && this.$refs.shell.contains(event.target),
+        openSearch: () => this.openSearch(),
+        closeSearch: () => this.closeSearch(),
+      }, event);
     },
     closeSearch(this: TerminalView): void {
       this.searchOpen = false;

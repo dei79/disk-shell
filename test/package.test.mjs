@@ -171,13 +171,15 @@ test("renames open and background shell sessions", () => {
 
 test("searches each terminal tab independently", () => {
   const view = readFileSync(join(integration, "src/ui/components/terminal-view.ts"), "utf8");
+  const shortcuts = readFileSync(join(integration, "src/ui/search-shortcuts.ts"), "utf8");
   assert.match(view, /SearchAddon/u);
   assert.match(view, /searchQuery: ""/u);
   assert.match(view, /findNext/u);
   assert.match(view, /findPrevious/u);
-  assert.match(view, /document\.addEventListener\("keydown", this\.searchShortcutHandler, true\)/u);
-  assert.match(view, /\(!event\.metaKey && !event\.ctrlKey\)/u);
-  assert.match(view, /event\.preventDefault\(\)/u);
+  assert.match(view, /window\.addEventListener\("keydown", this\.searchShortcutHandler, true\)/u);
+  assert.match(view, /handleSearchShortcutEvent/u);
+  assert.match(shortcuts, /\(!event\.metaKey && !event\.ctrlKey\)/u);
+  assert.match(shortcuts, /event\.preventDefault\(\)/u);
   assert.match(view, /this\.\$refs\.searchInput\?\.select\(\)/u);
 });
 
