@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -73,6 +74,10 @@ func newSessionManager() *sessionManager {
 
 var sessionStore = newSessionManager()
 
+var resolveProcessWorkingDirectory = func(processID int) (string, error) {
+	return os.Readlink("/proc/" + strconv.Itoa(processID) + "/cwd")
+}
+
 func (manager *sessionManager) open(account *identity, sessionID, name string) (*shellSession, *sessionAttachment, []byte, error) {
 	if sessionID != "" {
 		session := manager.find(account.username, sessionID)
@@ -122,8 +127,8 @@ func (manager *sessionManager) create(account *identity, name string) (*shellSes
 	// The installed setuid service must always drop to the authenticated DSM
 	// account. Unprivileged development tests already run as that account and
 	// cannot call setgroups, even when the requested groups are unchanged.
-	if os.Geteuid() == 0 || uint32(os.Geteuid()) != account.uid || uint32(os.Getegid()) != account.gid {
-		command.SysProcAttr.Credential = &syscall.Credential{Uid: account.uid, Gid: account.gid, Groups: account.groups}
+	if credential := commandCredential(account); credential != nil {
+		command.SysProcAttr.Credential = credential
 	}
 	terminalFile, err := pty.StartWithSize(command, &pty.Winsize{Cols: 120, Rows: 36})
 	if err != nil {
@@ -185,6 +190,17 @@ func (manager *sessionManager) find(owner, identifier string) *shellSession {
 		return nil
 	}
 	return session
+}
+
+func (session *shellSession) workingDirectory() (string, error) {
+	session.mu.Lock()
+	command := session.command
+	running := session.running
+	session.mu.Unlock()
+	if !running || command == nil || command.Process == nil {
+		return "", errors.New("session is not running")
+	}
+	return resolveProcessWorkingDirectory(command.Process.Pid)
 }
 
 func (manager *sessionManager) list(owner string) []sessionInfo {

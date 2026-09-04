@@ -26,6 +26,12 @@ export type Messages = {
   uploadLimits: string;
   uploadComplete: string;
   uploadFailed: string;
+  uploadNoFiles: string;
+  uploadDisconnected: string;
+  uploadConflictTitle: string;
+  uploadConflictDescription: string;
+  uploadOverride: string;
+  uploadKeepBoth: string;
   splitVertical: string;
   splitVerticalTooltip: string;
   splitHorizontal: string;

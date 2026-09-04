@@ -59,7 +59,7 @@ test("builds a self-contained DiskShell SPK", () => {
 });
 
 test("keeps terminal authentication and transport boundaries explicit", () => {
-  const backend = ["main.go", "session.go"]
+  const backend = ["main.go", "session.go", "upload.go"]
     .map((file) => readFileSync(join(integration, "native", file), "utf8"))
     .join("\n");
   assert.match(backend, /authenticate\.cgi/u);
@@ -201,9 +201,29 @@ test("uploads dropped files through an authenticated bounded endpoint", () => {
   const socket = readFileSync(join(integration, "src/ui/services/terminal-socket.ts"), "utf8");
   assert.match(backend, /maxUploadFileSize/u);
   assert.match(backend, /authenticateWithSlot/u);
-  assert.match(backend, /os\.O_EXCL/u);
+  assert.match(backend, /set -C/u);
   assert.match(view, /handleDrop/u);
-  assert.match(view, /shellQuote/u);
+  assert.doesNotMatch(view, /dataTransfer\?\.types\.includes\("Files"\)/u);
+  assert.match(view, /this\.showNotice\(this\.text\.uploadNoFiles\)/u);
+  assert.match(view, /this\.showNotice\(this\.text\.uploadDisconnected\)/u);
+  assert.match(view, /window\.addEventListener\(type, this\.dragEventHandler, true\)/u);
+  assert.match(view, /window\.removeEventListener\(type, this\.dragEventHandler, true\)/u);
+  assert.match(view, /event\.dataTransfer\.dropEffect = "copy"/u);
+  assert.match(view, /UploadConflictError/u);
+  assert.match(view, /checkUploadConflicts/u);
+  assert.match(view, /resolveUploadConflict/u);
+  assert.match(view, /text\.uploadOverride/u);
+  assert.match(view, /text\.uploadKeepBoth/u);
+  assert.match(socket, /sessionId, collision/u);
+  assert.match(socket, /files\.map\(\(file\) => file\.name\)/u);
+  assert.match(socket, /body\.append\("files", file, file\.name\)/u);
+  assert.doesNotMatch(socket, /for \(const file of files\) body\.append/u);
+  assert.match(backend, /session\.workingDirectory\(\)/u);
+  assert.match(backend, /collisionKeepBoth/u);
+  assert.match(backend, /collisionOverride/u);
+  assert.match(backend, /noTargetDirectory = "-T"/u);
+  assert.doesNotMatch(backend, /func removeUploads/u);
+  assert.doesNotMatch(view, /terminal\?\.paste\(paths\)/u);
   assert.match(socket, /X-Syno-Token/u);
   assert.match(nginx, /client_max_body_size 52m/u);
   assert.match(nginx, /client_body_timeout 60s/u);

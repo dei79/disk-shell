@@ -14,6 +14,14 @@ export interface TerminalSocketOptions {
   name: string;
 }
 
+export type UploadCollision = "ask" | "override" | "keep-both";
+
+export class UploadConflictError extends Error {
+  constructor(public readonly remainingFiles: File[] = []) {
+    super(messages.uploadFailed);
+  }
+}
+
 export class TerminalSocket {
   private socket: WebSocket | null = null;
   private ready = false;
@@ -95,25 +103,72 @@ export async function renameBackgroundSession(sessionId: string, name: string): 
   return message.session;
 }
 
-export function uploadFiles(files: File[], onProgress: (percent: number) => void): Promise<UploadInfo[]> {
+export async function checkUploadConflicts(files: File[], sessionId: string): Promise<{ conflict: boolean; target: string }> {
+  const response = await sessionFetch("/diskshell/uploads/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, names: files.map((file) => file.name) }),
+  });
+  if (!response.ok) throw new Error(messages.uploadFailed);
+  const message = await response.json() as { conflict: boolean; target: string };
+  if (typeof message.conflict !== "boolean" || typeof message.target !== "string") throw new Error(messages.invalidResponse);
+  return message;
+}
+
+export async function uploadFiles(
+  files: File[],
+  sessionId: string,
+  collision: UploadCollision,
+  target: string,
+  onProgress: (percent: number) => void,
+): Promise<UploadInfo[]> {
+  const uploads: UploadInfo[] = [];
+  const totalBytes = Math.max(1, files.reduce((total, file) => total + file.size, 0));
+  let completedBytes = 0;
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    try {
+      const upload = await uploadFile(file, sessionId, collision, target, (loaded) => {
+        onProgress(Math.round(((completedBytes + loaded) / totalBytes) * 100));
+      });
+      uploads.push(upload);
+      completedBytes += file.size;
+      onProgress(Math.round((completedBytes / totalBytes) * 100));
+    } catch (error) {
+      if (error instanceof UploadConflictError) throw new UploadConflictError(files.slice(index));
+      throw error;
+    }
+  }
+  return uploads;
+}
+
+function uploadFile(
+  file: File,
+  sessionId: string,
+  collision: UploadCollision,
+  target: string,
+  onProgress: (loaded: number) => void,
+): Promise<UploadInfo> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", "/diskshell/uploads");
+    const query = new URLSearchParams({ sessionId, collision });
+    request.open("POST", `/diskshell/uploads?${query.toString()}`);
     request.withCredentials = true;
+    request.setRequestHeader("X-Upload-Target", target);
     const token = currentSynoToken();
     if (token) request.setRequestHeader("X-Syno-Token", token);
     request.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+      if (event.lengthComputable) onProgress(Math.min(file.size, event.loaded));
     });
     request.addEventListener("load", () => {
       if (request.status < 200 || request.status >= 300) {
-        reject(new Error(messages.uploadFailed));
+        reject(request.status === 409 ? new UploadConflictError() : new Error(messages.uploadFailed));
         return;
       }
       try {
         const response = JSON.parse(request.responseText) as { uploads?: UploadInfo[] };
-        if (!Array.isArray(response.uploads)) throw new Error(messages.invalidResponse);
-        resolve(response.uploads);
+        if (!Array.isArray(response.uploads) || response.uploads.length !== 1) throw new Error(messages.invalidResponse);
+        resolve(response.uploads[0]);
       } catch {
         reject(new Error(messages.invalidResponse));
       }
@@ -121,7 +176,7 @@ export function uploadFiles(files: File[], onProgress: (percent: number) => void
     request.addEventListener("error", () => reject(new Error(messages.uploadFailed)));
     request.addEventListener("abort", () => reject(new Error(messages.uploadFailed)));
     const body = new FormData();
-    for (const file of files) body.append("files", file, file.name);
+    body.append("files", file, file.name);
     request.send(body);
   });
 }

@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -310,7 +310,7 @@ func TestSafeUploadNameRemovesPathsAndControls(t *testing.T) {
 	}
 }
 
-func TestSaveUploadUsesPrivateAccountDirectory(t *testing.T) {
+func TestSaveUploadUsesCurrentTerminalDirectory(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {
 		t.Skipf("current account is unavailable: %v", err)
@@ -323,9 +323,8 @@ func TestSaveUploadUsesPrivateAccountDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
-	t.Setenv("DISKSHELL_UPLOAD_ROOT", t.TempDir())
-	info, err := saveUpload(&identity{uid: uid, gid: gid}, "notes 1.txt", strings.NewReader("hello"))
+	directory := t.TempDir()
+	info, err := saveUpload(&identity{uid: uid, gid: gid}, directory, "notes 1.txt", collisionAsk, strings.NewReader("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,42 +342,86 @@ func TestSaveUploadUsesPrivateAccountDirectory(t *testing.T) {
 	if fileInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("upload permissions are %o", fileInfo.Mode().Perm())
 	}
-	if filepath.Base(filepath.Dir(info.Path)) != account.Uid {
-		t.Fatalf("upload was not isolated in UID directory: %q", info.Path)
+	if info.Path != filepath.Join(directory, "notes 1.txt") {
+		t.Fatalf("upload was not written to the terminal directory: %q", info.Path)
 	}
 }
 
-type uploadLockCheckingReader struct {
-	data    []byte
-	checked bool
-}
-
-func (reader *uploadLockCheckingReader) Read(target []byte) (int, error) {
-	if !reader.checked {
-		if !uploadLock.TryLock() {
-			return 0, errors.New("request body was read while the global upload lock was held")
-		}
-		uploadLock.Unlock()
-		reader.checked = true
-	}
-	if len(reader.data) == 0 {
-		return 0, io.EOF
-	}
-	count := copy(target, reader.data)
-	reader.data = reader.data[count:]
-	return count, nil
-}
-
-func TestSaveUploadDoesNotLockWhileReadingClient(t *testing.T) {
+func TestSaveUploadHandlesNameConflicts(t *testing.T) {
 	account := currentTestIdentity(t)
-	t.Setenv("DISKSHELL_DEVELOPMENT", "1")
-	t.Setenv("DISKSHELL_UPLOAD_ROOT", t.TempDir())
-	reader := &uploadLockCheckingReader{data: []byte("hello")}
-	if _, err := saveUpload(account, "notes.txt", reader); err != nil {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "notes.txt")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !reader.checked {
-		t.Fatal("upload source was not read")
+	if _, err := saveUpload(account, directory, "notes.txt", collisionAsk, strings.NewReader("new")); !errors.Is(err, errUploadConflict) {
+		t.Fatalf("conflicting upload returned %v", err)
+	}
+	if info, err := saveUpload(account, directory, "notes.txt", collisionOverride, strings.NewReader("new")); err != nil || info.Name != "notes.txt" {
+		t.Fatalf("override failed: %#v %v", info, err)
+	}
+	if contents, err := os.ReadFile(path); err != nil || string(contents) != "new" {
+		t.Fatalf("override contents=%q error=%v", contents, err)
+	}
+	if info, err := saveUpload(account, directory, "notes.txt", collisionKeepBoth, strings.NewReader("copy")); err != nil || info.Name != "notes (1).txt" {
+		t.Fatalf("keep-both failed: %#v %v", info, err)
+	}
+}
+
+func TestSaveUploadDoesNotEnterDirectoryTargets(t *testing.T) {
+	account := currentTestIdentity(t)
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	assertRejected := func(name string) {
+		t.Helper()
+		if _, err := saveUpload(account, directory, name, collisionAsk, strings.NewReader("ask")); !errors.Is(err, errUploadConflict) {
+			t.Fatalf("directory target %q did not conflict: %v", name, err)
+		}
+		if _, err := saveUpload(account, directory, name, collisionOverride, strings.NewReader("override")); err == nil {
+			t.Fatalf("directory target %q was overridden", name)
+		}
+	}
+	assertRejected("target")
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(directory, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	assertRejected("linked")
+	for _, candidate := range []string{target, outside} {
+		entries, err := os.ReadDir(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("upload escaped into %q: %#v", candidate, entries)
+		}
+	}
+}
+
+func TestUploadNamesConflictChecksAsSessionOwner(t *testing.T) {
+	account := currentTestIdentity(t)
+	directory := t.TempDir()
+	if conflict, err := uploadNamesConflict(account, directory, []string{"new.txt"}); err != nil || conflict {
+		t.Fatalf("new name conflict=%v error=%v", conflict, err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "existing.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if conflict, err := uploadNamesConflict(account, directory, []string{"existing.txt"}); err != nil || !conflict {
+		t.Fatalf("existing name conflict=%v error=%v", conflict, err)
+	}
+	if conflict, err := uploadNamesConflict(account, directory, []string{"same.txt", "same.txt"}); err != nil || !conflict {
+		t.Fatalf("duplicate names conflict=%v error=%v", conflict, err)
+	}
+	if err := os.Symlink("missing-target", filepath.Join(directory, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if conflict, err := uploadNamesConflict(account, directory, []string{"dangling"}); err != nil || !conflict {
+		t.Fatalf("dangling symlink conflict=%v error=%v", conflict, err)
 	}
 }
 
@@ -405,6 +448,7 @@ func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
 	}
 
 	account := currentTestIdentity(t)
+	configureUploadSession(t, account, root)
 	authenticateCGI = writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
 	idBinary = writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+strconv.FormatUint(uint64(account.gid), 10)+"; fi\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
@@ -418,8 +462,18 @@ func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil || len(uploaded.Uploads) != 1 {
 		t.Fatalf("unexpected upload response %#v: %v", uploaded, err)
 	}
-	if filepath.Base(filepath.Dir(uploaded.Uploads[0].Path)) != strconv.FormatUint(uint64(account.uid), 10) {
-		t.Fatalf("handler did not isolate upload by owner: %q", uploaded.Uploads[0].Path)
+	if uploaded.Uploads[0].Path != filepath.Join(root, "ok.txt") {
+		t.Fatalf("handler did not use terminal directory: %q", uploaded.Uploads[0].Path)
+	}
+	checkRequest := httptest.NewRequest(http.MethodPost, "http://dsm.local/diskshell/uploads/check", strings.NewReader(`{"sessionId":"upload-session","names":["ok.txt"]}`))
+	checkRequest.Host = "dsm.local"
+	checkRequest.Header.Set("Origin", "http://dsm.local")
+	checkRequest.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	uploadCheckIndex(response, checkRequest)
+	var checked uploadCheckResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &checked) != nil || !checked.Conflict {
+		t.Fatalf("upload preflight response=%d body=%s", response.Code, response.Body.String())
 	}
 	resetUploadRoot(t, root)
 
@@ -436,9 +490,10 @@ func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
 
 	response = httptest.NewRecorder()
 	uploadIndex(response, newUploadRequest(t, append(tenFiles, testUpload{name: "eleven", size: 1}), 0))
-	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != 0 {
+	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != maxUploadFiles {
 		t.Fatalf("too-many-files response=%d remaining=%d", response.Code, uploadFileCount(t, root))
 	}
+	resetUploadRoot(t, root)
 
 	response = httptest.NewRecorder()
 	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "large.bin", size: maxUploadFileSize + 1}}, 0))
@@ -448,25 +503,10 @@ func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
 
 	response = httptest.NewRecorder()
 	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "first.bin", size: maxUploadFileSize}, {name: "second.bin", size: maxUploadFileSize}}, 2*1024*1024))
-	if response.Code != http.StatusBadRequest || uploadFileCount(t, root) != 0 {
+	if response.Code != http.StatusBadRequest || uploadFileCount(t, root) != 2 {
 		t.Fatalf("oversized-request response=%d remaining=%d", response.Code, uploadFileCount(t, root))
 	}
 
-	directory, err := ensureUploadDirectory(account)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, "existing"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Truncate(filepath.Join(directory, "existing"), maxUploadStorage-1); err != nil {
-		t.Fatal(err)
-	}
-	response = httptest.NewRecorder()
-	uploadIndex(response, newUploadRequest(t, []testUpload{{name: "over-quota", size: 2}}, 0))
-	if response.Code != http.StatusRequestEntityTooLarge || uploadFileCount(t, root) != 1 {
-		t.Fatalf("storage-limit response=%d remaining=%d", response.Code, uploadFileCount(t, root))
-	}
 }
 
 type testUpload struct {
@@ -515,11 +555,82 @@ func newUploadRequest(t *testing.T, files []testUpload, padding int) *http.Reque
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://dsm.local/diskshell/uploads", &body)
+	request := httptest.NewRequest(http.MethodPost, "http://dsm.local/diskshell/uploads?sessionId=upload-session&collision=ask", &body)
 	request.Host = "dsm.local"
 	request.Header.Set("Origin", "http://dsm.local")
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if session := sessionStore.find(currentTestIdentity(t).username, "upload-session"); session != nil {
+		directory, _ := session.workingDirectory()
+		request.Header.Set("X-Upload-Target", signUploadTarget(session.owner, session.id, directory))
+	}
 	return request
+}
+
+func TestUploadTargetBinding(t *testing.T) {
+	token := signUploadTarget("alice", "session", "/a")
+	if !verifyUploadTarget(token, "alice", "session", "/a") {
+		t.Fatal("valid target rejected")
+	}
+	for _, args := range [][3]string{{"bob", "session", "/a"}, {"alice", "other", "/a"}, {"alice", "session", "/b"}} {
+		if verifyUploadTarget(token, args[0], args[1], args[2]) {
+			t.Fatal("changed target accepted")
+		}
+	}
+	if verifyUploadTarget(token+"x", "alice", "session", "/a") {
+		t.Fatal("tampering accepted")
+	}
+}
+
+func TestUploadOptionNames(t *testing.T) {
+	for _, mode := range []uploadCollision{collisionAsk, collisionOverride} {
+		for _, name := range []string{"-f", "--backup=numbered"} {
+			directory := t.TempDir()
+			if _, err := saveUpload(currentTestIdentity(t), directory, name, mode, strings.NewReader("data")); err != nil {
+				t.Fatal(err)
+			}
+			if data, err := os.ReadFile(filepath.Join(directory, name)); err != nil || string(data) != "data" {
+				t.Fatalf("filename mishandled: %v", err)
+			}
+		}
+	}
+}
+
+func TestUploadCommitCleansUpWriteFailure(t *testing.T) {
+	directory := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command, err := uploadCommitCommand(ctx, currentTestIdentity(t), directory, "file", collisionAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Args[2] = "ulimit -f 0\n" + command.Args[2]
+	command.Stdin = strings.NewReader(strings.Repeat("x", 4096))
+	if err := command.Run(); err == nil {
+		t.Fatal("expected write failure")
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("write failure left files: %v %v", entries, err)
+	}
+}
+
+func configureUploadSession(t *testing.T, account *identity, directory string) {
+	t.Helper()
+	previousStore := sessionStore
+	previousResolver := resolveProcessWorkingDirectory
+	manager := newSessionManager()
+	manager.sessions["upload-session"] = &shellSession{
+		id:      "upload-session",
+		owner:   account.username,
+		running: true,
+		command: &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}},
+	}
+	sessionStore = manager
+	resolveProcessWorkingDirectory = func(int) (string, error) { return directory, nil }
+	t.Cleanup(func() {
+		sessionStore = previousStore
+		resolveProcessWorkingDirectory = previousResolver
+	})
 }
 
 func currentTestIdentity(t *testing.T) *identity {

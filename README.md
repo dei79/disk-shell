@@ -17,8 +17,8 @@ terminal port on the network.
   with clear pane ownership and independent terminal sizing.
 - **Terminal search** — search each tab's scrollback with `⌘F` or `Ctrl+F` and
   navigate between matches.
-- **Drag-and-drop uploads** — securely upload files into a private directory for
-  the authenticated DSM account and insert their quoted paths into the shell.
+- **Drag-and-drop uploads** — securely upload files into the active shell's
+  current directory.
 - **Deliberate clipboard access** — Copy & Paste remains disabled until it is
   explicitly enabled for the current DiskShell window.
 - **DSM-native authentication** — uses the current DSM session, allows DSM

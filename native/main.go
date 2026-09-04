@@ -83,6 +83,7 @@ func main() {
 	mux.HandleFunc("/diskshell/health", health)
 	mux.HandleFunc("/diskshell/sessions", sessionIndex)
 	mux.HandleFunc("/diskshell/uploads", uploadIndex)
+	mux.HandleFunc("/diskshell/uploads/check", uploadCheckIndex)
 	mux.HandleFunc("/diskshell/ws", terminal)
 	server := &http.Server{
 		Addr:              listenAddress,

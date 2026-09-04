@@ -1,16 +1,24 @@
 package main
 
 import (
+	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+	"syscall"
+	"time"
 	"unicode"
 )
 
@@ -18,9 +26,18 @@ const (
 	maxUploadFileSize = 25 * 1024 * 1024
 	maxUploadRequest  = 50 * 1024 * 1024
 	maxUploadFiles    = 10
-	maxUploadStorage  = 100 * 1024 * 1024
 	maxUploadName     = 120
 )
+
+type uploadCollision string
+
+const (
+	collisionAsk      uploadCollision = "ask"
+	collisionOverride uploadCollision = "override"
+	collisionKeepBoth uploadCollision = "keep-both"
+)
+
+var errUploadConflict = errors.New("upload destination already exists")
 
 type uploadInfo struct {
 	Name string `json:"name"`
@@ -32,7 +49,98 @@ type uploadResponse struct {
 	Uploads []uploadInfo `json:"uploads"`
 }
 
-var uploadLock sync.Mutex
+type uploadCheckRequest struct {
+	SessionID string   `json:"sessionId"`
+	Names     []string `json:"names"`
+}
+
+type uploadCheckResponse struct {
+	Conflict bool   `json:"conflict"`
+	Target   string `json:"target"`
+}
+
+var uploadTargetKey = func() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic(err)
+	}
+	return key
+}()
+
+type uploadTarget struct {
+	Owner     string
+	Session   string
+	Directory string
+	Expires   int64
+}
+
+func signUploadTarget(owner, session, directory string) string {
+	body, _ := json.Marshal(uploadTarget{owner, session, directory, time.Now().Add(time.Hour).Unix()})
+	mac := hmac.New(sha256.New, uploadTargetKey)
+	mac.Write(body)
+	return base64.RawURLEncoding.EncodeToString(body) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func verifyUploadTarget(token, owner, session, directory string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	body, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, uploadTargetKey)
+	mac.Write(body)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return false
+	}
+	var target uploadTarget
+	return json.Unmarshal(body, &target) == nil && target.Owner == owner && target.Session == session && target.Directory == directory && target.Expires > time.Now().Unix()
+}
+
+func uploadCheckIndex(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(response, "Method not allowed.", http.StatusMethodNotAllowed)
+		return
+	}
+	if origin := request.Header.Get("Origin"); origin != "" && !allowedOrigin(request) {
+		http.Error(response, "Forbidden.", http.StatusForbidden)
+		return
+	}
+	account, err := authenticateWithSlot(request)
+	if err != nil {
+		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
+		return
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, 16*1024)
+	var check uploadCheckRequest
+	if err := json.NewDecoder(request.Body).Decode(&check); err != nil || len(check.Names) == 0 || len(check.Names) > maxUploadFiles {
+		http.Error(response, "Invalid upload check.", http.StatusBadRequest)
+		return
+	}
+	session := sessionStore.find(account.username, check.SessionID)
+	if session == nil {
+		http.Error(response, "The terminal session is no longer available.", http.StatusNotFound)
+		return
+	}
+	directory, err := session.workingDirectory()
+	if err != nil {
+		http.Error(response, "The terminal working directory is unavailable.", http.StatusUnprocessableEntity)
+		return
+	}
+	conflict, err := uploadNamesConflict(account, directory, check.Names)
+	if err != nil {
+		http.Error(response, "The upload destination could not be checked.", http.StatusUnprocessableEntity)
+		return
+	}
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = jsonResponse(response, uploadCheckResponse{Conflict: conflict, Target: signUploadTarget(account.username, check.SessionID, directory)})
+}
 
 func uploadIndex(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
@@ -48,6 +156,28 @@ func uploadIndex(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
 		return
 	}
+	session := sessionStore.find(account.username, request.URL.Query().Get("sessionId"))
+	if session == nil {
+		http.Error(response, "The terminal session is no longer available.", http.StatusNotFound)
+		return
+	}
+	directory, err := session.workingDirectory()
+	if err != nil {
+		http.Error(response, "The terminal working directory is unavailable.", http.StatusUnprocessableEntity)
+		return
+	}
+	collision := uploadCollision(request.URL.Query().Get("collision"))
+	if !verifyUploadTarget(request.Header.Get("X-Upload-Target"), account.username, session.id, directory) {
+		http.Error(response, "The upload destination changed. Drop the files again.", http.StatusPreconditionFailed)
+		return
+	}
+	if collision == "" {
+		collision = collisionAsk
+	}
+	if collision != collisionAsk && collision != collisionOverride && collision != collisionKeepBoth {
+		http.Error(response, "Invalid upload collision action.", http.StatusBadRequest)
+		return
+	}
 	request.Body = http.MaxBytesReader(response, request.Body, maxUploadRequest+1024*1024)
 	reader, err := request.MultipartReader()
 	if err != nil {
@@ -61,7 +191,6 @@ func uploadIndex(response http.ResponseWriter, request *http.Request) {
 			break
 		}
 		if nextError != nil {
-			removeUploads(uploads)
 			http.Error(response, "The upload could not be read.", http.StatusBadRequest)
 			return
 		}
@@ -71,15 +200,19 @@ func uploadIndex(response http.ResponseWriter, request *http.Request) {
 		}
 		if len(uploads) >= maxUploadFiles {
 			_ = part.Close()
-			removeUploads(uploads)
 			http.Error(response, "Too many files.", http.StatusRequestEntityTooLarge)
 			return
 		}
-		info, saveError := saveUpload(account, part.FileName(), part)
+		info, saveError := saveUpload(account, directory, part.FileName(), collision, part)
 		_ = part.Close()
 		if saveError != nil {
-			removeUploads(uploads)
-			http.Error(response, saveError.Error(), http.StatusRequestEntityTooLarge)
+			status := http.StatusUnprocessableEntity
+			if errors.Is(saveError, errUploadConflict) {
+				status = http.StatusConflict
+			} else if strings.Contains(saveError.Error(), "25 MiB") {
+				status = http.StatusRequestEntityTooLarge
+			}
+			http.Error(response, saveError.Error(), status)
 			return
 		}
 		uploads = append(uploads, info)
@@ -92,13 +225,34 @@ func uploadIndex(response http.ResponseWriter, request *http.Request) {
 	_ = jsonResponse(response, uploadResponse{Uploads: uploads})
 }
 
-func removeUploads(uploads []uploadInfo) {
-	for _, upload := range uploads {
-		_ = os.Remove(upload.Path)
+func uploadNamesConflict(account *identity, directory string, names []string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	seen := make(map[string]struct{}, len(names))
+	for _, originalName := range names {
+		name := safeUploadName(originalName)
+		if _, duplicate := seen[name]; duplicate {
+			return true, nil
+		}
+		seen[name] = struct{}{}
+		command := exec.CommandContext(ctx, "/bin/sh", "-c", `[ -e "$1" ] || [ -L "$1" ]`, "diskshell-upload-check", name)
+		command.WaitDelay = time.Second
+		command.Dir = directory
+		if credential := commandCredential(account); credential != nil {
+			command.SysProcAttr = &syscall.SysProcAttr{Credential: credential}
+		}
+		err := command.Run()
+		if err == nil {
+			return true, nil
+		}
+		if exitError, ok := err.(*exec.ExitError); !ok || exitError.ExitCode() != 1 {
+			return false, err
+		}
 	}
+	return false, nil
 }
 
-func saveUpload(account *identity, originalName string, source io.Reader) (uploadInfo, error) {
+func saveUpload(account *identity, directory, originalName string, collision uploadCollision, source io.Reader) (uploadInfo, error) {
 	temporary, err := os.CreateTemp("", "diskshell-upload-*")
 	if err != nil {
 		return uploadInfo{}, errors.New("The upload could not be staged.")
@@ -114,93 +268,104 @@ func saveUpload(account *identity, originalName string, source io.Reader) (uploa
 		return uploadInfo{}, errors.New("A file exceeds the 25 MiB upload limit.")
 	}
 
-	// Only serialize the bounded local-file commit and quota check. Reading the
-	// request body while holding this process-wide lock would let a slow client
-	// block uploads for every DSM account.
-	uploadLock.Lock()
-	defer uploadLock.Unlock()
-	directory, err := ensureUploadDirectory(account)
-	if err != nil {
-		return uploadInfo{}, errors.New("The upload directory is unavailable.")
-	}
-	used, err := directoryBytes(directory)
-	if err != nil || used+size > maxUploadStorage {
-		return uploadInfo{}, errors.New("The upload storage limit has been reached.")
-	}
-	identifier := make([]byte, 8)
-	if _, err := rand.Read(identifier); err != nil {
-		return uploadInfo{}, errors.New("The upload could not be created.")
-	}
 	name := safeUploadName(originalName)
-	path := filepath.Join(directory, hex.EncodeToString(identifier)+"-"+name)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return uploadInfo{}, errors.New("The upload could not be created.")
+	if collision == collisionKeepBoth {
+		name = availableUploadName(directory, name)
 	}
+	path := filepath.Join(directory, name)
 	staged, err := os.Open(temporaryPath)
 	if err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
 		return uploadInfo{}, errors.New("The upload could not be committed.")
 	}
-	_, copyError = io.Copy(file, staged)
-	stagedCloseError := staged.Close()
-	closeError = file.Close()
-	if copyError != nil || stagedCloseError != nil || closeError != nil {
-		_ = os.Remove(path)
-		return uploadInfo{}, errors.New("The upload storage limit has been reached.")
+	defer staged.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	command, err := uploadCommitCommand(ctx, account, directory, name, collision)
+	if err != nil {
+		return uploadInfo{}, err
 	}
-	if err := os.Chown(path, int(account.uid), int(account.gid)); err != nil {
-		_ = os.Remove(path)
-		return uploadInfo{}, errors.New("The uploaded file could not be assigned to the DSM account.")
+	command.Stdin = staged
+	command.WaitDelay = time.Second
+	command.Cancel = func() error { return syscall.Kill(-command.Process.Pid, syscall.SIGTERM) }
+	if err := command.Run(); err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 17 {
+			return uploadInfo{}, errUploadConflict
+		}
+		return uploadInfo{}, errors.New("The file could not be created in the terminal directory.")
 	}
 	return uploadInfo{Name: name, Path: path, Size: size}, nil
 }
 
-func ensureUploadDirectory(account *identity) (string, error) {
-	root := "/var/packages/DiskShell/var/uploads"
-	if os.Getuid() == os.Geteuid() && os.Getenv("DISKSHELL_DEVELOPMENT") == "1" {
-		if override := os.Getenv("DISKSHELL_UPLOAD_ROOT"); override != "" {
-			root = override
-		}
+func uploadCommitCommand(ctx context.Context, account *identity, directory, name string, collision uploadCollision) (*exec.Cmd, error) {
+	identifier := make([]byte, 8)
+	if _, err := rand.Read(identifier); err != nil {
+		return nil, errors.New("The upload could not be created.")
 	}
-	if err := os.MkdirAll(root, 0o711); err != nil {
-		return "", err
+	temporaryName := ".diskshell-upload-" + hex.EncodeToString(identifier)
+	noTargetDirectory := ""
+	if runtime.GOOS == "linux" {
+		// DSM ships GNU mv/ln. -T ensures a directory (or a symlink to one)
+		// is handled as the destination entry, never as a directory to enter.
+		noTargetDirectory = "-T"
 	}
-	rootInfo, err := os.Lstat(root)
-	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("invalid upload root")
+	var command *exec.Cmd
+	if collision == collisionOverride {
+		command = exec.CommandContext(ctx, "/bin/sh", "-c", `
+umask 077
+set -C
+exec 3> "$2"
+trap 'rm -f "$2"' 0 1 2 15
+cat >&3 || exit 18
+exec 3>&-
+if [ -d "$1" ]; then exit 18; fi
+mv -f ${3:+"$3"} -- "$2" "$1" || exit 18
+trap - 0 1 2 15
+`, "diskshell-upload", name, temporaryName, noTargetDirectory)
+	} else {
+		command = exec.CommandContext(ctx, "/bin/sh", "-c", `
+umask 077
+set -C
+exec 3> "$2"
+trap 'rm -f "$2"' 0 1 2 15
+cat >&3 || exit 18
+exec 3>&-
+if [ -d "$1" ]; then exit 17; fi
+if ! ln ${3:+"$3"} -- "$2" "$1"; then
+  if [ -e "$1" ] || [ -L "$1" ]; then exit 17; fi
+  exit 18
+fi
+rm -f "$2" || exit 18
+trap - 0 1 2 15
+`, "diskshell-upload", name, temporaryName, noTargetDirectory)
 	}
-	directory := filepath.Join(root, strconv.FormatUint(uint64(account.uid), 10))
-	if err := os.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", err
+	command.Dir = directory
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if credential := commandCredential(account); credential != nil {
+		command.SysProcAttr.Credential = credential
 	}
-	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("invalid account upload directory")
-	}
-	if err := os.Chown(directory, int(account.uid), int(account.gid)); err != nil {
-		return "", err
-	}
-	return directory, nil
+	return command, nil
 }
 
-func directoryBytes(directory string) (int64, error) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return 0, err
+func availableUploadName(directory, name string) string {
+	if _, err := os.Lstat(filepath.Join(directory, name)); errors.Is(err, os.ErrNotExist) {
+		return name
 	}
-	var total int64
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return 0, err
-		}
-		if info.Mode().IsRegular() {
-			total += info.Size()
+	extension := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, extension)
+	for index := 1; index < 10_000; index++ {
+		candidate := stem + " (" + strconv.Itoa(index) + ")" + extension
+		if _, err := os.Lstat(filepath.Join(directory, candidate)); errors.Is(err, os.ErrNotExist) {
+			return candidate
 		}
 	}
-	return total, nil
+	return stem + " (copy)" + extension
+}
+
+func commandCredential(account *identity) *syscall.Credential {
+	if os.Geteuid() == 0 || uint32(os.Geteuid()) != account.uid || uint32(os.Getegid()) != account.gid {
+		return &syscall.Credential{Uid: account.uid, Gid: account.gid, Groups: account.groups}
+	}
+	return nil
 }
 
 func safeUploadName(value string) string {

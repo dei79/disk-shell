@@ -3,12 +3,15 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 
 import {
+  checkUploadConflicts,
   listBackgroundSessions,
   renameBackgroundSession,
   TerminalSocket,
   terminateBackgroundSession,
+  UploadConflictError,
   uploadFiles,
 } from "../services/terminal-socket.js";
+import type { UploadCollision } from "../services/terminal-socket.js";
 import { messages } from "../i18n.js";
 import { handleSearchShortcutEvent } from "../search-shortcuts.js";
 import type { Messages } from "../i18n.js";
@@ -57,11 +60,13 @@ type TerminalView = {
   dragActive: boolean;
   uploading: boolean;
   uploadProgress: number;
+  pendingUpload: { files: File[]; tabId: number; target: string } | null;
   toolbarTooltip: string;
   toolbarTooltipLeft: number;
   toolbarTooltipTop: number;
   fitFrame: number | null;
   searchShortcutHandler: ((event: KeyboardEvent) => void) | null;
+  dragEventHandler: ((event: DragEvent) => void) | null;
   $refs: {
     shell: HTMLElement;
     actions: HTMLElement;
@@ -100,6 +105,9 @@ type TerminalView = {
   handleDragEnter(event: DragEvent): void;
   handleDragLeave(): void;
   handleDrop(event: DragEvent): Promise<void>;
+  uploadDroppedFiles(tab: ShellTab, files: File[], collision: UploadCollision, target: string): Promise<void>;
+  resolveUploadConflict(collision: "override" | "keep-both"): void;
+  cancelUploadConflict(): void;
   connect(): void;
   fit(): void;
   fitVisible(): void;
@@ -175,6 +183,13 @@ export const terminalViewComponent = {
     '  </div>',
     '  <terminal-status-bar v-if="activeTab" :state="activeTab.connectionState" :text="text"></terminal-status-bar>',
     '  <div v-if="notice" class="diskshell-notice" role="status">{{ notice }}</div>',
+    '  <div v-if="pendingUpload" class="diskshell-dialog-backdrop">',
+    '    <div class="diskshell-dialog" role="dialog" aria-modal="true" :aria-label="text.uploadConflictTitle">',
+    '      <strong>{{ text.uploadConflictTitle }}</strong>',
+    '      <span>{{ text.uploadConflictDescription }}</span>',
+    '      <div><button type="button" class="danger" @click="resolveUploadConflict(\'override\')">{{ text.uploadOverride }}</button><button type="button" @click="resolveUploadConflict(\'keep-both\')">{{ text.uploadKeepBoth }}</button><button type="button" @click="cancelUploadConflict">{{ text.cancel }}</button></div>',
+    '    </div>',
+    '  </div>',
     '  <div v-if="pendingCloseTab" class="diskshell-dialog-backdrop" @click.self="pendingCloseTab = null">',
     '    <div class="diskshell-dialog" role="dialog" aria-modal="true" :aria-label="text.closeBackgroundTitle">',
     '      <strong>{{ text.closeBackgroundTitle }}</strong>',
@@ -213,10 +228,12 @@ export const terminalViewComponent = {
       dragActive: false,
       uploading: false,
       uploadProgress: 0,
+      pendingUpload: null as { files: File[]; tabId: number; target: string } | null,
       toolbarTooltip: "",
       toolbarTooltipLeft: -9999,
       toolbarTooltipTop: -9999,
       searchShortcutHandler: null as ((event: KeyboardEvent) => void) | null,
+      dragEventHandler: null as ((event: DragEvent) => void) | null,
     };
   },
   computed: {
@@ -230,12 +247,36 @@ export const terminalViewComponent = {
   mounted(this: TerminalView): void {
     this.searchShortcutHandler = (event) => { this.handleSearchShortcut(event); };
     window.addEventListener("keydown", this.searchShortcutHandler, true);
+    this.dragEventHandler = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !this.$refs.shell.contains(target)) {
+        if (event.type === "drop") {
+          this.dragDepth = 0;
+          this.dragActive = false;
+        }
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.type === "dragenter") this.handleDragEnter(event);
+      else if (event.type === "dragleave") this.handleDragLeave();
+      else if (event.type === "drop") void this.handleDrop(event);
+      else if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    for (const type of ["dragenter", "dragover", "dragleave", "drop"] as const) {
+      window.addEventListener(type, this.dragEventHandler, true);
+    }
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.$refs.terminalHost);
     void this.restoreSessions();
   },
   beforeDestroy(this: TerminalView): void {
     if (this.searchShortcutHandler) window.removeEventListener("keydown", this.searchShortcutHandler, true);
+    if (this.dragEventHandler) {
+      for (const type of ["dragenter", "dragover", "dragleave", "drop"] as const) {
+        window.removeEventListener(type, this.dragEventHandler, true);
+      }
+    }
     this.resizeObserver?.disconnect();
     if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
     if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
@@ -657,7 +698,7 @@ export const terminalViewComponent = {
       return tabId === this.primaryTabId || (this.splitMode !== "none" && tabId === this.secondaryTabId);
     },
     handleDragEnter(this: TerminalView, event: DragEvent): void {
-      if (!event.dataTransfer?.types.includes("Files")) return;
+      if (!event.dataTransfer) return;
       this.dragDepth += 1;
       this.dragActive = true;
     },
@@ -670,25 +711,60 @@ export const terminalViewComponent = {
       this.dragActive = false;
       const tab = this.activeTab;
       const files = Array.from(event.dataTransfer?.files || []);
-      if (!tab || tab.connectionState !== "connected" || files.length === 0) return;
+      if (files.length === 0) {
+        this.showNotice(this.text.uploadNoFiles);
+        return;
+      }
+      if (!tab || tab.connectionState !== "connected") {
+        this.showNotice(this.text.uploadDisconnected);
+        return;
+      }
       if (files.length > 10 || files.some((file) => file.size > 25 * 1024 * 1024)) {
         this.showNotice(this.text.uploadLimits);
         return;
       }
+      try {
+        const check = await checkUploadConflicts(files, tab.sessionId);
+        if (check.conflict) {
+          this.pendingUpload = { files, tabId: tab.id, target: check.target };
+          return;
+        }
+        await this.uploadDroppedFiles(tab, files, "ask", check.target);
+      } catch {
+        this.showNotice(this.text.uploadFailed);
+      }
+    },
+    async uploadDroppedFiles(this: TerminalView, tab: ShellTab, files: File[], collision: UploadCollision, target: string): Promise<void> {
       this.uploading = true;
       this.uploadProgress = 0;
       try {
-        const uploads = await uploadFiles(files, (percent) => { this.uploadProgress = percent; });
-        const paths = uploads.map((upload) => shellQuote(upload.path)).join(" ");
-        tab.terminal?.paste(paths);
+        const uploads = await uploadFiles(files, tab.sessionId, collision, target, (percent) => { this.uploadProgress = percent; });
         this.showNotice(this.text.uploadComplete.replace("{count}", String(uploads.length)));
-      } catch {
-        this.showNotice(this.text.uploadFailed);
+      } catch (error) {
+        if (error instanceof UploadConflictError && collision === "ask") {
+          this.pendingUpload = { files: error.remainingFiles.length > 0 ? error.remainingFiles : files, tabId: tab.id, target };
+        } else {
+          this.showNotice(this.text.uploadFailed);
+        }
       } finally {
         this.uploading = false;
         this.uploadProgress = 0;
         tab.terminal?.focus();
       }
+    },
+    resolveUploadConflict(this: TerminalView, collision: "override" | "keep-both"): void {
+      const pending = this.pendingUpload;
+      this.pendingUpload = null;
+      const tab = pending && this.tabs.find((candidate) => candidate.id === pending.tabId);
+      if (!pending || !tab || tab.connectionState !== "connected") {
+        this.showNotice(this.text.uploadDisconnected);
+        return;
+      }
+      void this.uploadDroppedFiles(tab, pending.files, collision, pending.target);
+    },
+    cancelUploadConflict(this: TerminalView): void {
+      this.pendingUpload = null;
+      this.activeTab?.terminal?.focus();
     },
     allowClipboard(this: TerminalView): void {
       this.clipboardEnabled = true;
@@ -713,7 +789,3 @@ export const terminalViewComponent = {
     },
   },
 };
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
