@@ -43,6 +43,12 @@ test("builds a self-contained DiskShell SPK", () => {
     assert.match(info, /^support_url="https:\/\/github\.com\/dei79\/disk-shell\/issues"$/mu);
     assert.match(info, /^dsmappname="SYNO\.SDS\.App\.DiskShell\.Instance"$/mu);
     assert.match(info, new RegExp(`version="${packageVersion}-${testRevision}"`, "u"));
+    const bundledUi = execFileSync("tar", [
+      "-xOzf",
+      join(extraction, "package.tgz"),
+      `ui/DiskShell-${packageVersion}-${testRevision}.js`,
+    ], { encoding: "utf8" });
+    assert.match(bundledUi, new RegExp(`version: "${packageVersion}-${testRevision}"`, "u"));
     const privilege = JSON.parse(readFileSync(join(extraction, "conf/privilege"), "utf8"));
     assert.ok(privilege.tool.some((tool) => tool.relpath === "bin/diskshell-server" && tool.user === "root" && tool.permission === "4750"));
     const resource = JSON.parse(readFileSync(join(extraction, "conf/resource"), "utf8"));
@@ -119,11 +125,16 @@ test("fits the terminal from container-driven DSM window resizes", () => {
 
 test("keeps the status bar compact when the optional alert is absent", () => {
   const styles = readFileSync(join(integration, "src/ui/styles/main.scss"), "utf8");
+  const status = readFileSync(join(integration, "src/ui/components/status-bar.ts"), "utf8");
   assert.match(styles, /\.diskshell-toolbar\s*\{[^}]*grid-row:\s*1/u);
   assert.match(styles, /\.diskshell-tabs\s*\{[^}]*grid-row:\s*2/u);
   assert.match(styles, /\.diskshell-alert\s*\{[^}]*grid-row:\s*3/u);
   assert.match(styles, /\.diskshell-terminal-host\s*\{[^}]*grid-row:\s*4/u);
   assert.match(styles, /\.diskshell-status\s*\{[^}]*grid-row:\s*5/u);
+  assert.match(status, /v\{\{ version \}\}/u);
+  assert.match(status, /diskshell-status-meta/u);
+  assert.match(styles, /\.diskshell-status-meta\s*\{[^}]*margin-left:\s*auto/u);
+  assert.match(styles, /\.diskshell-status-version\s*\{\s*flex:\s*0 0 auto/u);
 });
 
 test("keeps one independent terminal connection per shell tab", () => {

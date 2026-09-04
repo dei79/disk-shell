@@ -479,12 +479,21 @@
   &.error { background: $danger; }
 }
 
-.diskshell-status-hint {
+.diskshell-status-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
   margin-left: auto;
+}
+
+.diskshell-status-hint {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.diskshell-status-version { flex: 0 0 auto; }
 
 @container diskshell (max-width: 720px) {
   .diskshell-toolbar {

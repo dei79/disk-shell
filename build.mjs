@@ -127,6 +127,7 @@ await build({
   entryPoints: [join(here, "src/ui/app.ts")],
   outfile: join(payload, "ui", scriptName),
   bundle: true,
+  define: { DISKSHELL_VERSION: JSON.stringify(spkVersion) },
   format: "iife",
   legalComments: "none",
   minify: false,
