@@ -58,6 +58,9 @@ type TerminalView = {
   resizeObserver: ResizeObserver | null;
   dragDepth: number;
   dragActive: boolean;
+  dragTabId: number | null;
+  uploadTabId: number | null;
+  checkingUpload: boolean;
   uploading: boolean;
   uploadProgress: number;
   pendingUpload: { files: File[]; tabId: number; target: string } | null;
@@ -103,6 +106,7 @@ type TerminalView = {
   activatePane(tabId: number): void;
   isTabVisible(tabId: number): boolean;
   handleDragEnter(event: DragEvent): void;
+  dropTab(event: DragEvent): ShellTab | null;
   handleDragLeave(): void;
   handleDrop(event: DragEvent): Promise<void>;
   uploadDroppedFiles(tab: ShellTab, files: File[], collision: UploadCollision, target: string): Promise<void>;
@@ -170,14 +174,15 @@ export const terminalViewComponent = {
     '      <button type="button" :aria-label="text.nextResult" :title="text.nextResult" @click="searchNext">↓</button>',
     '      <button type="button" :aria-label="text.closeSearch" :title="text.closeSearch" @click="closeSearch">×</button>',
     '    </div>',
-    '    <div v-if="dragActive || uploading" class="diskshell-upload-overlay" role="status">',
-    '      <strong>{{ uploading ? text.uploading : text.dropFiles }}</strong>',
-    '      <span v-if="uploading">{{ uploadProgress }}%</span>',
-    '      <span v-else>{{ text.uploadLimits }}</span>',
-    '    </div>',
     '    <div class="diskshell-panes" :class="\'split-\' + splitMode">',
     `      <div v-for="tab in tabs" :key="tab.id" ref="terminalCanvases" :data-tab-id="tab.id" v-show="isTabVisible(tab.id)" class="diskshell-canvas" :class="{ 'active-pane': tab.id === activeTabId, 'primary-pane': tab.id === primaryTabId, 'secondary-pane': splitMode !== 'none' && tab.id === secondaryTabId }" :aria-label="text.terminalAriaLabel + ': ' + tab.title" @mousedown="activatePane(tab.id)" @focusin="activatePane(tab.id)">`,
     '        <div v-if="splitMode !== \'none\'" class="diskshell-pane-tab" :class="{ active: tab.id === activeTabId }"><span class="diskshell-tab-status" :class="tab.connectionState" aria-hidden="true"></span><strong>{{ tab.title }}</strong></div>',
+    '        <div v-if="(dragActive && dragTabId === tab.id) || (uploading && uploadTabId === tab.id)" class="diskshell-upload-overlay" role="status">',
+    '          <strong>{{ uploading ? text.uploading : text.dropFiles }}</strong>',
+    '          <strong>{{ tab.title }}</strong>',
+    '          <span v-if="uploading">{{ uploadProgress }}%</span>',
+    '          <span v-else>{{ text.uploadLimits }}</span>',
+    '        </div>',
     '      </div>',
     '    </div>',
     '  </div>',
@@ -226,6 +231,9 @@ export const terminalViewComponent = {
       fitFrame: null as number | null,
       dragDepth: 0,
       dragActive: false,
+      dragTabId: null,
+      uploadTabId: null,
+      checkingUpload: false,
       uploading: false,
       uploadProgress: 0,
       pendingUpload: null as { files: File[]; tabId: number; target: string } | null,
@@ -250,6 +258,7 @@ export const terminalViewComponent = {
     this.dragEventHandler = (event) => {
       const target = event.target;
       if (!(target instanceof Node) || !this.$refs.shell.contains(target)) {
+        this.dragTabId = null;
         if (event.type === "drop") {
           this.dragDepth = 0;
           this.dragActive = false;
@@ -261,7 +270,12 @@ export const terminalViewComponent = {
       if (event.type === "dragenter") this.handleDragEnter(event);
       else if (event.type === "dragleave") this.handleDragLeave();
       else if (event.type === "drop") void this.handleDrop(event);
-      else if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      else if (event.dataTransfer) {
+        const tab = this.dropTab(event);
+        this.dragTabId = tab?.id ?? null;
+        this.dragActive = tab !== null;
+        event.dataTransfer.dropEffect = tab ? "copy" : "none";
+      }
     };
     for (const type of ["dragenter", "dragover", "dragleave", "drop"] as const) {
       window.addEventListener(type, this.dragEventHandler, true);
@@ -697,19 +711,29 @@ export const terminalViewComponent = {
     isTabVisible(this: TerminalView, tabId: number): boolean {
       return tabId === this.primaryTabId || (this.splitMode !== "none" && tabId === this.secondaryTabId);
     },
+    dropTab(this: TerminalView, event: DragEvent): ShellTab | null {
+      if (this.uploading || this.checkingUpload || this.pendingUpload) return null;
+      const target = event.target;
+      const canvas = target instanceof Element ? target.closest<HTMLElement>(".diskshell-canvas[data-tab-id]") : null;
+      if (!canvas || !this.$refs.terminalHost.contains(canvas)) return null;
+      const id = Number(canvas.dataset.tabId);
+      return this.tabs.find((tab) => tab.id === id && this.isTabVisible(id) && tab.connectionState === "connected") ?? null;
+    },
     handleDragEnter(this: TerminalView, event: DragEvent): void {
       if (!event.dataTransfer) return;
       this.dragDepth += 1;
-      this.dragActive = true;
+      this.dragTabId = this.dropTab(event)?.id ?? null;
+      this.dragActive = this.dragTabId !== null;
     },
     handleDragLeave(this: TerminalView): void {
       this.dragDepth = Math.max(0, this.dragDepth - 1);
-      if (this.dragDepth === 0) this.dragActive = false;
+      if (this.dragDepth === 0) { this.dragActive = false; this.dragTabId = null; }
     },
     async handleDrop(this: TerminalView, event: DragEvent): Promise<void> {
       this.dragDepth = 0;
       this.dragActive = false;
-      const tab = this.activeTab;
+      const tab = this.dropTab(event);
+      this.dragTabId = null;
       const files = Array.from(event.dataTransfer?.files || []);
       if (files.length === 0) {
         this.showNotice(this.text.uploadNoFiles);
@@ -723,6 +747,7 @@ export const terminalViewComponent = {
         this.showNotice(this.text.uploadLimits);
         return;
       }
+      this.checkingUpload = true;
       try {
         const check = await checkUploadConflicts(files, tab.sessionId);
         if (check.conflict) {
@@ -732,10 +757,13 @@ export const terminalViewComponent = {
         await this.uploadDroppedFiles(tab, files, "ask", check.target);
       } catch {
         this.showNotice(this.text.uploadFailed);
+      } finally {
+        this.checkingUpload = false;
       }
     },
     async uploadDroppedFiles(this: TerminalView, tab: ShellTab, files: File[], collision: UploadCollision, target: string): Promise<void> {
       this.uploading = true;
+      this.uploadTabId = tab.id;
       this.uploadProgress = 0;
       try {
         const uploads = await uploadFiles(files, tab.sessionId, collision, target, (percent) => { this.uploadProgress = percent; });
@@ -748,6 +776,7 @@ export const terminalViewComponent = {
         }
       } finally {
         this.uploading = false;
+        this.uploadTabId = null;
         this.uploadProgress = 0;
         tab.terminal?.focus();
       }

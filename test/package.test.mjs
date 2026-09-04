@@ -208,7 +208,7 @@ test("uploads dropped files through an authenticated bounded endpoint", () => {
   assert.match(view, /this\.showNotice\(this\.text\.uploadDisconnected\)/u);
   assert.match(view, /window\.addEventListener\(type, this\.dragEventHandler, true\)/u);
   assert.match(view, /window\.removeEventListener\(type, this\.dragEventHandler, true\)/u);
-  assert.match(view, /event\.dataTransfer\.dropEffect = "copy"/u);
+  assert.match(view, /event\.dataTransfer\.dropEffect = tab \? "copy" : "none"/u);
   assert.match(view, /UploadConflictError/u);
   assert.match(view, /checkUploadConflicts/u);
   assert.match(view, /resolveUploadConflict/u);
