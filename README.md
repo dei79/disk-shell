@@ -28,8 +28,8 @@ terminal port on the network.
 
 ## Installation
 
-DiskShell targets **DSM 7.2 on x86_64 and RTD1296 ARM64 Synology
-systems**, including the DS420j.
+DiskShell targets **DSM 7.2 on x86_64 and ARMv8 Synology systems**,
+including RTD1296, Armada 37xx, RTD1619, and RTD1619B models.
 
 1. Download the latest `.spk` and its checksum from
    [GitHub Releases](https://github.com/dei79/disk-shell/releases/latest).
@@ -73,7 +73,7 @@ following Go and Synology package architectures:
 | Build target | Go architecture | Synology SPK architecture |
 | --- | --- | --- |
 | `x86_64` | `amd64` | `x86_64` |
-| `arm64` | `arm64` | `rtd1296` |
+| `arm64` | `arm64` | `armv8` |
 
 The target can also be selected directly with the environment:
 

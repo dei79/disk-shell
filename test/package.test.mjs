@@ -68,7 +68,7 @@ test("builds a self-contained DiskShell SPK", () => {
   }
 });
 
-test("builds an ARM64 SPK for RTD1296 systems", () => {
+test("builds an ARM64 SPK for Synology ARMv8 systems", () => {
   const output = execFileSync(process.execPath, [join(integration, "build.mjs")], {
     cwd: integration,
     encoding: "utf8",
@@ -85,7 +85,7 @@ test("builds an ARM64 SPK for RTD1296 systems", () => {
   try {
     execFileSync("tar", ["-xf", spk, "-C", extraction]);
     const info = readFileSync(join(extraction, "INFO"), "utf8");
-    assert.match(info, /^arch="rtd1296"$/mu);
+    assert.match(info, /^arch="armv8"$/mu);
     const server = execFileSync(
       "tar",
       ["-xOzf", join(extraction, "package.tgz"), "bin/diskshell-server"],

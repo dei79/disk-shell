@@ -27,7 +27,7 @@ const spkVersion = `${metadata.version}-${packageRevision}`;
 const targetName = process.env.DISKSHELL_TARGET_ARCH || "x86_64";
 const targets = {
   x86_64: { goArch: "amd64", spkArch: "x86_64" },
-  arm64: { goArch: "arm64", spkArch: "rtd1296" },
+  arm64: { goArch: "arm64", spkArch: "armv8" },
 };
 const target = targets[targetName];
 if (!target) {
