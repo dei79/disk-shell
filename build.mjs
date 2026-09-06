@@ -24,10 +24,20 @@ const goBinary = process.env.DISKSHELL_GO_BINARY || "go";
 const minimumGoVersion = [1, 26, 0];
 const packageRevision = process.env.DISKSHELL_PACKAGE_REVISION || "13";
 const spkVersion = `${metadata.version}-${packageRevision}`;
+const targetName = process.env.DISKSHELL_TARGET_ARCH || "x86_64";
+const targets = {
+  x86_64: { goArch: "amd64", spkArch: "x86_64" },
+  arm64: { goArch: "arm64", spkArch: "rtd1296" },
+};
+const target = targets[targetName];
+if (!target) {
+  throw new Error(`Unsupported DiskShell target architecture: ${targetName}. Expected one of: ${Object.keys(targets).join(", ")}.`);
+}
 const buildRoot = join(here, "build");
-const staging = join(buildRoot, "staging");
-const payload = join(buildRoot, "payload");
-const output = join(buildRoot, `DiskShell-${spkVersion}.spk`);
+const workRoot = join(buildRoot, `.work-${targetName}`);
+const staging = join(workRoot, "staging");
+const payload = join(workRoot, "payload");
+const output = join(buildRoot, `DiskShell-${spkVersion}-${targetName}.spk`);
 
 function assertSupportedGoVersion() {
   const output = execFileSync(goBinary, ["version"], { encoding: "utf8" }).trim();
@@ -114,7 +124,7 @@ function archive(outputPath, cwd, entries, compressed = false) {
   execFileSync("tar", argumentsList, { cwd, env: { ...process.env, COPYFILE_DISABLE: "1" }, stdio: "inherit" });
 }
 
-rmSync(buildRoot, { force: true, recursive: true });
+rmSync(workRoot, { force: true, recursive: true });
 mkdirSync(staging, { recursive: true });
 cpSync(join(here, "conf"), join(staging, "conf"), { recursive: true });
 cpSync(join(here, "scripts"), join(staging, "scripts"), { recursive: true });
@@ -153,7 +163,7 @@ writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 mkdirSync(join(payload, "bin"), { recursive: true });
 execFileSync(goBinary, ["build", "-trimpath", "-ldflags=-s -w -buildid=", "-o", join(payload, "bin/diskshell-server"), "./native"], {
   cwd: here,
-  env: { ...process.env, CGO_ENABLED: "0", GOARCH: "amd64", GOOS: "linux" },
+  env: { ...process.env, CGO_ENABLED: "0", GOARCH: target.goArch, GOOS: "linux" },
   stdio: "inherit",
 });
 
@@ -170,9 +180,11 @@ archive(join(staging, "package.tgz"), payload, readdirSync(payload).sort(), true
 rmSync(payload, { force: true, recursive: true });
 const info = readFileSync(join(here, "INFO.template"), "utf8")
   .replaceAll("@SPK_VERSION@", spkVersion)
+  .replaceAll("@SPK_ARCH@", target.spkArch)
   .replaceAll("@EXTRACT_SIZE@", String(extractSize));
 writeFileSync(join(staging, "INFO"), info);
 archive(output, staging, ["INFO", "package.tgz", "scripts", "conf", "LICENSE", "PACKAGE_ICON.PNG", "PACKAGE_ICON_256.PNG"]);
 
 if (!existsSync(output)) throw new Error("DiskShell SPK build did not produce an output file.");
+rmSync(workRoot, { force: true, recursive: true });
 process.stdout.write(`${relative(here, output)}\n`);
