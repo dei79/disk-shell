@@ -28,7 +28,8 @@ terminal port on the network.
 
 ## Installation
 
-DiskShell currently targets **DSM 7.2 on x86_64 Synology systems**.
+DiskShell targets **DSM 7.2 on x86_64 and ARMv8 Synology systems**,
+including RTD1296, Armada 37xx, RTD1619, and RTD1619B models.
 
 1. Download the latest `.spk` and its checksum from
    [GitHub Releases](https://github.com/dei79/disk-shell/releases/latest).
@@ -55,13 +56,29 @@ Install dependencies, validate the project, and build an SPK:
 npm ci
 npm run check
 npm test
-npm run build
+npm run build:all
 ```
 
-The package is written to:
+The packages are written to:
 
 ```text
-build/DiskShell-<version>-<revision>.spk
+build/DiskShell-<version>-<revision>-x86_64.spk
+build/DiskShell-<version>-<revision>-arm64.spk
+```
+
+Build only one target with `npm run build:x86_64` or `npm run build:arm64`.
+The default `npm run build` command builds x86_64. Target names map to the
+following Go and Synology package architectures:
+
+| Build target | Go architecture | Synology SPK architecture |
+| --- | --- | --- |
+| `x86_64` | `amd64` | `x86_64` |
+| `arm64` | `arm64` | `armv8` |
+
+The target can also be selected directly with the environment:
+
+```sh
+DISKSHELL_TARGET_ARCH=arm64 npm run build
 ```
 
 When multiple Go toolchains are installed, select one explicitly:
@@ -144,8 +161,9 @@ Please do not test package installation on a production NAS.
 ## Releases
 
 The version in `package.json` must match the semantic Git tag. Pushing a tag such
-as `v1.1.0` runs the release workflow, builds revision `1`, generates a SHA-256
-checksum, and publishes both files as a GitHub Release.
+as `v1.2.0` runs the release workflow, builds revision `1` for x86_64 and ARM64,
+generates SHA-256 checksums, and publishes both packages and checksums as a
+GitHub Release.
 
 ## License
 

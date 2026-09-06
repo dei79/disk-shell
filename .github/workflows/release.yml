@@ -51,7 +51,6 @@ jobs:
             exit 1
           fi
           echo "DISKSHELL_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "DISKSHELL_SPK_PATH=build/DiskShell-${version}-1.spk" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: npm ci
@@ -65,19 +64,21 @@ jobs:
       - name: Build SPK
         env:
           DISKSHELL_PACKAGE_REVISION: "1"
-        run: npm run build
+        run: npm run build:all
 
       - name: Generate checksum
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$DISKSHELL_SPK_PATH"
-          spk_name="$(basename "$DISKSHELL_SPK_PATH")"
-          (
-            cd build
-            sha256sum "$spk_name" > "$spk_name.sha256"
-            sha256sum --check "$spk_name.sha256"
-          )
+          for architecture in x86_64 arm64; do
+            spk_name="DiskShell-${DISKSHELL_RELEASE_VERSION}-1-${architecture}.spk"
+            test -f "build/${spk_name}"
+            (
+              cd build
+              sha256sum "$spk_name" > "$spk_name.sha256"
+              sha256sum --check "$spk_name.sha256"
+            )
+          done
 
       - name: Upload release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -110,9 +111,11 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           echo "DISKSHELL_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "DISKSHELL_SPK_PATH=build/DiskShell-${version}-1.spk" >> "$GITHUB_ENV"
-          test -f "build/DiskShell-${version}-1.spk"
-          (cd build && sha256sum --check "DiskShell-${version}-1.spk.sha256")
+          for architecture in x86_64 arm64; do
+            spk_name="DiskShell-${version}-1-${architecture}.spk"
+            test -f "build/${spk_name}"
+            (cd build && sha256sum --check "$spk_name.sha256")
+          done
 
       - name: Publish GitHub Release
         env:
@@ -129,8 +132,8 @@ jobs:
               --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" \
-            "$DISKSHELL_SPK_PATH" \
-            "$DISKSHELL_SPK_PATH.sha256" \
+            build/DiskShell-"$DISKSHELL_RELEASE_VERSION"-1-*.spk \
+            build/DiskShell-"$DISKSHELL_RELEASE_VERSION"-1-*.spk.sha256 \
             --clobber
           gh release edit "$GITHUB_REF_NAME" \
             --draft=false \

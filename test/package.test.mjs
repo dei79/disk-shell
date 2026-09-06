@@ -15,6 +15,7 @@ test("builds a self-contained DiskShell SPK", () => {
     encoding: "utf8",
     env: { ...process.env, DISKSHELL_PACKAGE_REVISION: testRevision },
   }).trim();
+  assert.equal(output, `build/DiskShell-${packageVersion}-${testRevision}-x86_64.spk`);
   const spk = join(integration, output);
   assert.equal(existsSync(spk), true);
   const extraction = mkdtempSync(join(tmpdir(), "diskshell-test-"));
@@ -35,6 +36,7 @@ test("builds a self-contained DiskShell SPK", () => {
     ]) assert.match(payload, new RegExp(`^${entry}$`, "mu"));
     const info = readFileSync(join(extraction, "INFO"), "utf8");
     assert.match(info, /^package="DiskShell"$/mu);
+    assert.match(info, /^arch="x86_64"$/mu);
     assert.match(info, /^displayname="DiskShell"$/mu);
     assert.match(info, /^maintainer="dei79"$/mu);
     assert.match(info, /^maintainer_url="https:\/\/github\.com\/dei79"$/mu);
@@ -49,13 +51,62 @@ test("builds a self-contained DiskShell SPK", () => {
       `ui/DiskShell-${packageVersion}-${testRevision}.js`,
     ], { encoding: "utf8" });
     assert.match(bundledUi, new RegExp(`version: "${packageVersion}-${testRevision}"`, "u"));
+    const server = execFileSync(
+      "tar",
+      ["-xOzf", join(extraction, "package.tgz"), "bin/diskshell-server"],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+    assert.equal(server.subarray(0, 4).toString("hex"), "7f454c46");
+    assert.equal(server.readUInt16LE(18), 62);
     const privilege = JSON.parse(readFileSync(join(extraction, "conf/privilege"), "utf8"));
     assert.ok(privilege.tool.some((tool) => tool.relpath === "bin/diskshell-server" && tool.user === "root" && tool.permission === "4750"));
     const resource = JSON.parse(readFileSync(join(extraction, "conf/resource"), "utf8"));
     assert.equal("systemd-user-unit" in resource, false);
   } finally {
     rmSync(extraction, { force: true, recursive: true });
+    rmSync(spk, { force: true });
   }
+});
+
+test("builds an ARM64 SPK for Synology ARMv8 systems", () => {
+  const output = execFileSync(process.execPath, [join(integration, "build.mjs")], {
+    cwd: integration,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      DISKSHELL_PACKAGE_REVISION: testRevision,
+      DISKSHELL_TARGET_ARCH: "arm64",
+    },
+  }).trim();
+  assert.equal(output, `build/DiskShell-${packageVersion}-${testRevision}-arm64.spk`);
+  const spk = join(integration, output);
+  assert.equal(existsSync(spk), true);
+  const extraction = mkdtempSync(join(tmpdir(), "diskshell-arm64-test-"));
+  try {
+    execFileSync("tar", ["-xf", spk, "-C", extraction]);
+    const info = readFileSync(join(extraction, "INFO"), "utf8");
+    assert.match(info, /^arch="armv8"$/mu);
+    const server = execFileSync(
+      "tar",
+      ["-xOzf", join(extraction, "package.tgz"), "bin/diskshell-server"],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+    assert.equal(server.subarray(0, 4).toString("hex"), "7f454c46");
+    assert.equal(server.readUInt16LE(18), 183);
+  } finally {
+    rmSync(extraction, { force: true, recursive: true });
+    rmSync(spk, { force: true });
+  }
+});
+
+test("rejects unsupported package architectures", () => {
+  const result = spawnSync(process.execPath, [join(integration, "build.mjs")], {
+    cwd: integration,
+    encoding: "utf8",
+    env: { ...process.env, DISKSHELL_TARGET_ARCH: "mips64" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unsupported DiskShell target architecture: mips64/u);
 });
 
 test("keeps terminal authentication and transport boundaries explicit", () => {

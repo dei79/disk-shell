@@ -6,6 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "build:x86_64": "DISKSHELL_TARGET_ARCH=x86_64 node build.mjs",
+    "build:arm64": "DISKSHELL_TARGET_ARCH=arm64 node build.mjs",
+    "build:all": "npm run build:x86_64 && npm run build:arm64",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "node --test test/*.test.mjs && node test/run-go.mjs"
   },
