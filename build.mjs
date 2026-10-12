@@ -139,6 +139,14 @@ const xtermStyles = readFileSync(join(here, "node_modules/@xterm/xterm/css/xterm
 const applicationStyles = compileSass(join(here, "src/ui/styles/main.scss"), { style: "compressed" }).css;
 writeFileSync(join(payload, "ui", styleName), `${xtermStyles}\n${applicationStyles}`);
 
+const fontSourceDir = join(here, "src/ui/fonts");
+const fontTargetDir = join(payload, "ui/fonts");
+
+if (existsSync(fontSourceDir)) {
+  mkdirSync(fontTargetDir, { recursive: true });
+  cpSync(fontSourceDir, fontTargetDir, { recursive: true });
+}
+
 const scriptPath = join(payload, "ui", scriptName);
 writeFileSync(
   scriptPath,

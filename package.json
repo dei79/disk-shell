@@ -7,7 +7,8 @@
   "scripts": {
     "build": "node build.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test test/*.test.mjs && node test/run-go.mjs"
+    "test": "node --test test/*.test.mjs && node test/run-go.mjs",
+    "download-font": "mkdir \"src\\ui\\fonts\" 2>nul & curl -Lo \"src\\ui\\fonts\\SymbolsNerdFont-Regular.woff2\" \"https://nick2bad4u.github.io/nerd-fonts-woff2/fonts/woff2/NerdFontsSymbolsOnly/SymbolsNerdFont-Regular.woff2\""
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",

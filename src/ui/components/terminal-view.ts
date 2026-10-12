@@ -405,7 +405,7 @@ export const terminalViewComponent = {
         convertEol: false,
         cursorBlink: true,
         cursorStyle: "bar",
-        fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+        fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", "Symbols Nerd Font", monospace',
         fontSize: 14,
         minimumContrastRatio: 7,
         scrollback: 5000,
