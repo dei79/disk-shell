@@ -49,6 +49,10 @@ test("builds a self-contained DiskShell SPK", () => {
       `ui/DiskShell-${packageVersion}-${testRevision}.js`,
     ], { encoding: "utf8" });
     assert.match(bundledUi, new RegExp(`version: "${packageVersion}-${testRevision}"`, "u"));
+    const config = JSON.parse(execFileSync("tar", [
+      "-xOzf", join(extraction, "package.tgz"), "ui/config",
+    ], { encoding: "utf8" }));
+    assert.equal(config[`DiskShell-${packageVersion}-${testRevision}.js`]["SYNO.SDS.App.DiskShell.Instance"].allUsers, true);
     const privilege = JSON.parse(readFileSync(join(extraction, "conf/privilege"), "utf8"));
     assert.ok(privilege.tool.some((tool) => tool.relpath === "bin/diskshell-server" && tool.user === "root" && tool.permission === "4750"));
     const resource = JSON.parse(readFileSync(join(extraction, "conf/resource"), "utf8"));
@@ -59,11 +63,17 @@ test("builds a self-contained DiskShell SPK", () => {
 });
 
 test("keeps terminal authentication and transport boundaries explicit", () => {
+  const proxy = readFileSync(join(integration, "payload/nginx/diskshell.conf"), "utf8");
+  assert.match(proxy, /proxy_set_header X-Real-IP \$remote_addr;/u);
   const backend = ["main.go", "session.go", "upload.go"]
     .map((file) => readFileSync(join(integration, "native", file), "utf8"))
     .join("\n");
   assert.match(backend, /authenticate\.cgi/u);
-  assert.match(backend, /administrators/u);
+  assert.doesNotMatch(backend, /administrators|"-Gn"|containsWord/u);
+  assert.match(backend, /validUsername\(username\)/u);
+  assert.match(backend, /user\.Lookup\(username\)/u);
+  assert.match(backend, /idBinary, "-G", username/u);
+  assert.match(backend, /Uid: account\.uid, Gid: account\.gid, Groups: account\.groups/u);
   assert.match(backend, /CheckOrigin:\s+allowedOrigin/u);
   assert.match(backend, /SetReadLimit\(maxMessageSize\)/u);
   assert.match(backend, /syscall\.Credential/u);

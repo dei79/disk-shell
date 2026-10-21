@@ -1,7 +1,7 @@
 # DiskShell
 
 A secure, native terminal for the Synology DSM desktop. DiskShell gives DSM
-administrators a modern multi-tab shell with persistent sessions, split views,
+users a modern multi-tab shell with persistent sessions, split views,
 search, uploads, and explicit clipboard controls—without exposing a separate
 terminal port on the network.
 
@@ -21,8 +21,8 @@ terminal port on the network.
   current directory.
 - **Deliberate clipboard access** — Copy & Paste remains disabled until it is
   explicitly enabled for the current DiskShell window.
-- **DSM-native authentication** — uses the current DSM session, allows DSM
-  administrators only, and starts the shell under the authenticated account.
+- **DSM-native authentication** — requires a valid DSM session and
+  starts the shell under the authenticated DSM account.
 - **Live system monitor** — automatically scaled one-minute histories per logical CPU core and for
   RAM usage, the fullest NAS volume, fastest fan, and hottest drive sensor;
   values stream every two seconds over an authenticated WebSocket. Click a widget
@@ -53,8 +53,7 @@ DiskShell currently targets **DSM 7.2 on x86_64 Synology systems**.
    [GitHub Releases](https://github.com/dei79/disk-shell/releases/latest).
 2. Verify the downloaded package against the `.sha256` file.
 3. In DSM, open **Package Center → Manual Install** and select the SPK.
-4. Launch **DiskShell** from the DSM main menu while signed in as an
-   administrator.
+4. Launch **DiskShell** from the DSM main menu while signed in to DSM.
 
 DiskShell's service listens only on `127.0.0.1:16082`. DSM's nginx proxy exposes
 the application under `/diskshell/`; no additional network port is published.
@@ -99,9 +98,14 @@ DISKSHELL_PACKAGE_REVISION=42 npm run build
 ## Architecture and security
 
 The browser UI is written in TypeScript and SCSS and uses xterm.js. A compact Go
-service validates the active DSM session, verifies membership in the DSM
-`administrators` group, and launches `/bin/sh` under that account through a
-pseudo-terminal.
+service validates the active DSM session through `authenticate.cgi` and launches
+`/bin/sh -l` under the authenticated account through a pseudo-terminal. The setuid
+service drops privileges using that account's UID, GID, and supplementary groups,
+and uses its home directory (falling back to `/tmp` if unavailable).
+
+DiskShell does not automatically grant root privileges. Filesystem access and
+command permissions are those of the authenticated DSM user. Administrator
+accounts retain whatever privileges DSM and Unix normally give them.
 
 Important boundaries include:
 
@@ -134,17 +138,20 @@ Use a disposable DSM test system and a unique package revision. After
 installation:
 
 1. Confirm `/diskshell/health` returns `{"status":"ok"}` through the DSM URL.
-2. Open DiskShell as a DSM administrator and run:
+2. Open DiskShell as a normal DSM user and run:
 
    ```sh
    printf '__DISKSHELL_OK__\n'
-   id -un
+   id
    stty size
    ```
 
-3. Verify the marker, authenticated account, and a non-zero terminal size.
+3. Verify the marker, the account's UID, GID and groups, and a non-zero terminal
+   size. Confirm its home directory and normal filesystem permissions.
 4. Resize the DSM window and verify `stty size` changes accordingly.
-5. Confirm non-administrator accounts cannot open a shell.
+5. Repeat with an administrator account and confirm its own credentials.
+6. Confirm neither account can list, reconnect to, rename, terminate, or upload
+   into the other account's sessions.
 
 ## Contributing
 

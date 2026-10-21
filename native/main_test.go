@@ -81,6 +81,32 @@ func TestCGIEnvironment(t *testing.T) {
 	}
 }
 
+func TestCGIEnvironmentPreservesProxiedClientIP(t *testing.T) {
+	for _, sample := range []struct {
+		peer, forwarded, want string
+	}{
+		{"127.0.0.1:40000", "192.0.2.3", "192.0.2.3"},
+		{"127.0.0.1:40000", "2001:db8::3", "2001:db8::3"},
+		{"[::1]:40000", "192.0.2.3", "192.0.2.3"},
+		{"192.0.2.4:40000", "192.0.2.3", "192.0.2.4"},
+		{"127.0.0.1:40000", "", "127.0.0.1"},
+		{"127.0.0.1:40000", "not-an-ip", "127.0.0.1"},
+		{"127.0.0.1:40000", "192.0.2.3, 192.0.2.4", "127.0.0.1"},
+	} {
+		t.Run(sample.peer+"/"+sample.forwarded, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://dsm.local/diskshell/ws", nil)
+			request.RemoteAddr = sample.peer
+			request.Header.Set("X-Real-IP", sample.forwarded)
+			for _, value := range cgiEnvironment(request) {
+				if value == "REMOTE_ADDR="+sample.want {
+					return
+				}
+			}
+			t.Fatalf("CGI did not receive expected client IP %q", sample.want)
+		})
+	}
+}
+
 func TestDevelopmentOverridesRequireMatchingRealAndEffectiveIdentity(t *testing.T) {
 	// This test documents the setuid boundary. The package binary has differing
 	// real/effective IDs on DSM, so the override condition must remain explicit.
@@ -90,6 +116,26 @@ func TestDevelopmentOverridesRequireMatchingRealAndEffectiveIdentity(t *testing.
 	}
 	if !strings.Contains(string(source), `os.Getuid() == os.Geteuid() && os.Getenv("DISKSHELL_DEVELOPMENT") == "1"`) {
 		t.Fatal("development overrides are not guarded against setuid execution")
+	}
+}
+
+func TestCommandCredentialPreservesIdentity(t *testing.T) {
+	account := &identity{uid: uint32(os.Geteuid()) + 1, gid: 100, groups: []uint32{100, 65536}}
+	credential := commandCredential(account)
+	if credential == nil || credential.Uid != account.uid || credential.Gid != account.gid || credential.NoSetGroups || len(credential.Groups) != 2 || credential.Groups[0] != 100 || credential.Groups[1] != 65536 {
+		t.Fatalf("shell credentials changed: %#v", credential)
+	}
+}
+
+func TestUploadCommandDoesNotInheritServiceEnvironment(t *testing.T) {
+	t.Setenv("DISKSHELL_UNTRUSTED_ENV", "must-not-be-inherited")
+	command, err := uploadCommitCommand(context.Background(), currentTestIdentity(t), t.TempDir(), "file", collisionAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Args[2] = `[ -z "$DISKSHELL_UNTRUSTED_ENV" ] && [ "$PATH" = /usr/bin:/bin ]`
+	if err := command.Run(); err != nil {
+		t.Fatalf("upload command inherited service environment: %v", err)
 	}
 }
 
@@ -116,36 +162,82 @@ func TestShellHomeFallsBackForMissingDirectory(t *testing.T) {
 	}
 }
 
-func TestTerminalRejectsInvalidSession(t *testing.T) {
+func TestEndpointsRejectInvalidSession(t *testing.T) {
 	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nexit 0\n")
 	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nexit 1\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
-	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
-	request.Host = "dsm.local"
-	request.Header.Set("Origin", "http://dsm.local")
-	response := httptest.NewRecorder()
-	terminal(response, request)
-	if response.Code != 401 {
-		t.Fatalf("invalid session returned HTTP %d", response.Code)
+	for _, endpoint := range []struct {
+		path, method string
+		handler      http.HandlerFunc
+	}{
+		{"ws", http.MethodGet, terminal},
+		{"sessions", http.MethodGet, sessionIndex},
+		{"uploads", http.MethodPost, uploadIndex},
+		{"uploads/check", http.MethodPost, uploadCheckIndex},
+	} {
+		t.Run(endpoint.path, func(t *testing.T) {
+			request := httptest.NewRequest(endpoint.method, "http://dsm.local/diskshell/"+endpoint.path, nil)
+			request.Header.Set("Origin", "http://dsm.local")
+			response := httptest.NewRecorder()
+			endpoint.handler(response, request)
+			if response.Code != http.StatusUnauthorized || response.Body.String() != "A valid DSM login is required.\n" {
+				t.Fatalf("invalid session returned HTTP %d: %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
-func TestTerminalRejectsNonAdministrator(t *testing.T) {
-	if _, err := user.Current(); err != nil {
-		t.Skipf("current account is unavailable: %v", err)
-	}
-	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
-	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo users; else echo 20; fi\n")
+func TestAuthenticationAcceptsNonAdministrator(t *testing.T) {
+	want := currentTestIdentity(t)
+	t.Setenv("DISKSHELL_UNTRUSTED_ENV", "must-not-be-inherited")
+	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\n[ -z \"$DISKSHELL_UNTRUSTED_ENV\" ] || exit 1\nid -un\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\n[ -z \"$DISKSHELL_UNTRUSTED_ENV\" ] || exit 1\ncase \"$1\" in\n-Gn) echo users;;\n-G) echo 100 65536;;\n*) exit 1;;\nesac\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
 	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
-	request.Host = "dsm.local"
-	request.Header.Set("Origin", "http://dsm.local")
-	response := httptest.NewRecorder()
-	terminal(response, request)
-	if response.Code != 401 {
-		t.Fatalf("non-administrator returned HTTP %d", response.Code)
+	account, err := authenticateWithSlot(request)
+	if err != nil {
+		t.Fatalf("valid non-administrator session rejected: %v", err)
+	}
+	if account.username != want.username || account.uid != want.uid || account.gid != want.gid || account.home != shellHome(want.home) {
+		t.Fatalf("authenticated identity changed: %#v, want %#v", account, want)
+	}
+	if len(account.groups) != 2 || account.groups[0] != 100 || account.groups[1] != 65536 {
+		t.Fatalf("supplementary groups changed: %v", account.groups)
+	}
+
+	configureUploadSession(t, &identity{username: "another-user"}, t.TempDir())
+	sessionStore.sessions["upload-session"].persistent = true
+	if _, _, _, err := sessionStore.open(account, "upload-session", "", false, ""); err == nil {
+		t.Fatal("another user's terminal could be attached")
+	}
+	for _, endpoint := range []struct {
+		method, path, body string
+		handler            http.HandlerFunc
+		status             int
+	}{
+		{http.MethodGet, "sessions", "", sessionIndex, http.StatusOK},
+		{http.MethodPatch, "sessions?id=upload-session", `{"name":"Foreign"}`, sessionIndex, http.StatusBadRequest},
+		{http.MethodDelete, "sessions?id=upload-session", "", sessionIndex, http.StatusNotFound},
+		{http.MethodPost, "uploads?sessionId=upload-session", "", uploadIndex, http.StatusNotFound},
+		{http.MethodPost, "uploads/check", `{"sessionId":"upload-session","names":["file"]}`, uploadCheckIndex, http.StatusNotFound},
+	} {
+		t.Run(endpoint.method+" "+endpoint.path, func(t *testing.T) {
+			request := httptest.NewRequest(endpoint.method, "http://dsm.local/diskshell/"+endpoint.path, strings.NewReader(endpoint.body))
+			request.Header.Set("Origin", "http://dsm.local")
+			response := httptest.NewRecorder()
+			endpoint.handler(response, request)
+			if response.Code != endpoint.status {
+				t.Fatalf("unexpected HTTP %d: %s", response.Code, response.Body.String())
+			}
+			if endpoint.method == http.MethodGet {
+				var message serverMessage
+				if err := json.Unmarshal(response.Body.Bytes(), &message); err != nil || len(message.Sessions) != 0 {
+					t.Fatalf("another user's sessions were listed: %s", response.Body.String())
+				}
+			}
+		})
 	}
 }
 
@@ -215,7 +307,7 @@ func TestShellSlotIsReleasedAfterUpgradeFailure(t *testing.T) {
 		t.Skipf("current account is unavailable: %v", err)
 	}
 	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
-	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo users; else echo "+account.Gid+"; fi\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 	request := httptest.NewRequest("GET", "http://dsm.local/diskshell/ws", nil)
 	request.Host = "dsm.local"
@@ -450,7 +542,7 @@ func TestUploadHandlerEnforcesAuthenticationOriginAndLimits(t *testing.T) {
 	account := currentTestIdentity(t)
 	configureUploadSession(t, account, root)
 	authenticateCGI = writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
-	idBinary = writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+strconv.FormatUint(uint64(account.gid), 10)+"; fi\n")
+	idBinary = writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo users; else echo "+strconv.FormatUint(uint64(account.gid), 10)+"; fi\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
 	response = httptest.NewRecorder()
@@ -684,7 +776,7 @@ func TestPersistentSessionCanDetachReplayReattachAndTerminate(t *testing.T) {
 		t.Skipf("current account is unavailable: %v", err)
 	}
 	authenticateCGI := writeTestExecutable(t, "authenticate.cgi", "#!/bin/sh\nid -un\n")
-	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo administrators; else echo "+account.Gid+"; fi\n")
+	idBinary := writeTestExecutable(t, "id", "#!/bin/sh\nif [ \"$1\" = \"-Gn\" ]; then echo users; else echo "+account.Gid+"; fi\n")
 	configureDevelopmentAuthentication(t, authenticateCGI, idBinary)
 
 	previousStore := sessionStore

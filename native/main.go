@@ -150,7 +150,7 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 			return
 		}
 		log.Printf("Terminal authentication rejected: %v", err)
-		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
+		http.Error(response, "A valid DSM login is required.", http.StatusUnauthorized)
 		return
 	}
 	upgradeHeader := make(http.Header)
@@ -264,7 +264,7 @@ func sessionIndex(response http.ResponseWriter, request *http.Request) {
 	}
 	account, err := authenticateWithSlot(request)
 	if err != nil {
-		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
+		http.Error(response, "A valid DSM login is required.", http.StatusUnauthorized)
 		return
 	}
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -337,15 +337,6 @@ func authenticateContext(ctx context.Context, request *http.Request) (*identity,
 	if !validUsername(username) {
 		return nil, fmt.Errorf("%w: no valid account", errSessionDenied)
 	}
-	groupsCommand := exec.CommandContext(ctx, idBinary, "-Gn", username)
-	groupsCommand.WaitDelay = time.Second
-	groups, err := groupsCommand.Output()
-	if err != nil {
-		return nil, fmt.Errorf("DSM group lookup failed: %w", err)
-	}
-	if !containsWord(string(groups), "administrators") {
-		return nil, fmt.Errorf("%w: administrator permission required", errSessionDenied)
-	}
 	account, err := user.Lookup(username)
 	if err != nil {
 		return nil, err
@@ -359,6 +350,7 @@ func authenticateContext(ctx context.Context, request *http.Request) (*identity,
 		return nil, err
 	}
 	groupIDsCommand := exec.CommandContext(ctx, idBinary, "-G", username)
+	groupIDsCommand.Env = []string{"PATH=/usr/bin:/bin"}
 	groupIDsCommand.WaitDelay = time.Second
 	groupIDs, err := groupIDsCommand.Output()
 	if err != nil {
@@ -425,6 +417,13 @@ func cgiEnvironment(request *http.Request) []string {
 	if host == "" {
 		host = request.RemoteAddr
 	}
+	// DSM nginx overwrites X-Real-IP with the client's address. Only trust it
+	// from the local proxy, so authenticate.cgi sees the DSM login IP.
+	if peer := net.ParseIP(host); peer != nil && peer.IsLoopback() {
+		if client := net.ParseIP(request.Header.Get("X-Real-IP")); client != nil {
+			host = client.String()
+		}
+	}
 	return []string{
 		"GATEWAY_INTERFACE=CGI/1.1",
 		"PATH=/usr/syno/bin:/usr/bin:/bin",
@@ -460,15 +459,6 @@ func validUsername(value string) bool {
 		}
 	}
 	return true
-}
-
-func containsWord(value, expected string) bool {
-	for _, word := range strings.Fields(value) {
-		if word == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func parseID(value string) (uint32, error) {

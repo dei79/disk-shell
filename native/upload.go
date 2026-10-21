@@ -114,7 +114,7 @@ func uploadCheckIndex(response http.ResponseWriter, request *http.Request) {
 	}
 	account, err := authenticateWithSlot(request)
 	if err != nil {
-		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
+		http.Error(response, "A valid DSM login is required.", http.StatusUnauthorized)
 		return
 	}
 	request.Body = http.MaxBytesReader(response, request.Body, 16*1024)
@@ -153,7 +153,7 @@ func uploadIndex(response http.ResponseWriter, request *http.Request) {
 	}
 	account, err := authenticateWithSlot(request)
 	if err != nil {
-		http.Error(response, "A valid DSM administrator login is required.", http.StatusUnauthorized)
+		http.Error(response, "A valid DSM login is required.", http.StatusUnauthorized)
 		return
 	}
 	session := sessionStore.find(account.username, request.URL.Query().Get("sessionId"))
@@ -236,6 +236,7 @@ func uploadNamesConflict(account *identity, directory string, names []string) (b
 		}
 		seen[name] = struct{}{}
 		command := exec.CommandContext(ctx, "/bin/sh", "-c", `[ -e "$1" ] || [ -L "$1" ]`, "diskshell-upload-check", name)
+		command.Env = []string{"PATH=/usr/bin:/bin"}
 		command.WaitDelay = time.Second
 		command.Dir = directory
 		if credential := commandCredential(account); credential != nil {
@@ -338,6 +339,7 @@ rm -f "$2" || exit 18
 trap - 0 1 2 15
 `, "diskshell-upload", name, temporaryName, noTargetDirectory)
 	}
+	command.Env = []string{"PATH=/usr/bin:/bin"}
 	command.Dir = directory
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if credential := commandCredential(account); credential != nil {

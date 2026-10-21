@@ -88,7 +88,7 @@ const english = Object.freeze({
   invalidResponse: "The terminal service returned an invalid response.",
   shellStartFailed: "The DSM shell could not be started.",
   serviceError: "The terminal service returned an error.",
-  sessionHint: "DSM administrator account · authenticated by the current DSM session",
+  sessionHint: "DSM account · authenticated by the current DSM session",
   status: Object.freeze({
     connecting: "Connecting …",
     connected: "Connected",
@@ -187,7 +187,7 @@ const german = Object.freeze({
   invalidResponse: "Der Terminal-Dienst hat eine ungültige Antwort gesendet.",
   shellStartFailed: "Die DSM-Shell konnte nicht gestartet werden.",
   serviceError: "Der Terminal-Dienst hat einen Fehler gemeldet.",
-  sessionHint: "DSM-Administratorkonto · über die aktuelle DSM-Sitzung authentifiziert",
+  sessionHint: "DSM-Konto · über die aktuelle DSM-Sitzung authentifiziert",
   status: Object.freeze({
     connecting: "Verbindung wird hergestellt …",
     connected: "Verbunden",

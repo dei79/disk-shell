@@ -4,7 +4,7 @@
       "type": "app",
       "title": "DiskShell",
       "appWindow": "SYNO.SDS.App.DiskShell.Instance",
-      "allUsers": false,
+      "allUsers": true,
       "allowMultiInstance": false,
       "hidden": false,
       "icon": "images/icon_{0}.png",

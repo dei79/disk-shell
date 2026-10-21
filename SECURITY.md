@@ -1,7 +1,7 @@
 # Security Policy
 
-DiskShell provides an administrator shell inside Synology DSM. Security reports
-are taken seriously, especially when they concern authentication, authorization,
+DiskShell provides a shell for authenticated DSM users inside Synology DSM.
+Security reports are taken seriously, especially when they concern authentication, authorization,
 session isolation, uploads, WebSocket connections, or command execution.
 
 ## Supported versions
